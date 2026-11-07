@@ -9,6 +9,12 @@
 //   window <x> <y>            -> prints JSON: the top-level window at that screen point (any app)
 //   type <hwnd> <b64> <enter> -> brings that window to the front and types the text with SendInput
 //                                (free dictation into any app: Notepad, a browser, a chat)
+//   foreground                -> prints JSON: the window in front ({ hwnd, pid, title })
+//   list                         also gives renamed Windows Terminal tabs their name (tabName)
+//   focus <pid> <chain> [b64 tab] -> brings the terminal of console <pid> to the front, and in Windows
+//                                Terminal its tab (by its renamed name, else its title); <chain>
+//                                (comma-separated pids) is the fallback when no console window
+//                                is found: the nearest one with a window
 //
 // Works for classic conhost windows and for ConPTY hosts (Windows Terminal, VS Code), because
 // each shell still owns a console input buffer. Focus never moves.
@@ -72,6 +78,10 @@ const ShowWindow = u32.func("bool __stdcall ShowWindow(void* hwnd, int cmd)");
 const SendInput = u32.func("uint32_t __stdcall SendInput(uint32_t n, void* inputs, int size)");
 const QueryFullProcessImageNameW = k32.func("bool __stdcall QueryFullProcessImageNameW(void* h, uint32_t flags, _Out_ void* buf, _Inout_ uint32_t* size)");
 const OpenProcess = k32.func("void* __stdcall OpenProcess(uint32_t access, bool inherit, uint32_t pid)");
+const FindWindowExW = u32.func("void* __stdcall FindWindowExW(void* parent, void* after, const char16_t* cls, const char16_t* title)");
+const GetWindow = u32.func("void* __stdcall GetWindow(void* hwnd, uint32_t cmd)");
+const GetWindowTextLengthW = u32.func("int __stdcall GetWindowTextLengthW(void* hwnd)");
+const GetClassNameW = u32.func("int __stdcall GetClassNameW(void* hwnd, _Out_ void* buf, int max)");
 
 const INVALID_HANDLE = -1n;
 const isInvalid = (h) => !h || koffi.address(h) === 0n || koffi.address(h) === 0xffffffffffffffffn || koffi.address(h) === BigInt.asUintN(64, INVALID_HANDLE);
@@ -327,22 +337,26 @@ const KEYEVENTF_KEYUP = 0x2;
 const KEYEVENTF_UNICODE = 0x4;
 const VK_MENU = 0x12;
 
+// Brings window `hwnd` (a number) to the front. -> true when it is in front.
+function bringToFront(hwnd) {
+  const h = koffi.as(hwnd, "void*");
+  if (!IsWindow(h)) throw new Error("That window is gone.");
+  if (IsIconic(h)) ShowWindow(h, 9 /* SW_RESTORE */);
+  if (hwndNum(GetForegroundWindow()) === hwnd) return true;
+  // Windows only lets the process that received the last input change the foreground window;
+  // a tapped Alt key makes this process that one (the classic SetForegroundWindow workaround).
+  sendKeys([{ vk: VK_MENU }, { vk: VK_MENU, flags: KEYEVENTF_KEYUP }]);
+  SetForegroundWindow(h);
+  const t0 = Date.now();
+  while (hwndNum(GetForegroundWindow()) !== hwnd && Date.now() - t0 < 500) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  return hwndNum(GetForegroundWindow()) === hwnd;
+}
+
 // Types `text` into window `hwnd` as Unicode key events, after bringing it to the front. The text
 // is never typed into a window other than the one asked for: if the window cannot be brought
 // forward, that is an error.
 function typeInto(hwnd, text, enter) {
-  const h = koffi.as(hwnd, "void*");
-  if (!IsWindow(h)) throw new Error("That window is gone.");
-  if (IsIconic(h)) ShowWindow(h, 9 /* SW_RESTORE */);
-  if (hwndNum(GetForegroundWindow()) !== hwnd) {
-    // Windows only lets the process that received the last input change the foreground window;
-    // a tapped Alt key makes this process that one (the classic SetForegroundWindow workaround).
-    sendKeys([{ vk: VK_MENU }, { vk: VK_MENU, flags: KEYEVENTF_KEYUP }]);
-    SetForegroundWindow(h);
-    const t0 = Date.now();
-    while (hwndNum(GetForegroundWindow()) !== hwnd && Date.now() - t0 < 500) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    if (hwndNum(GetForegroundWindow()) !== hwnd) throw new Error("Could not bring that window to the front.");
-  }
+  if (!bringToFront(hwnd)) throw new Error("Could not bring that window to the front.");
   const events = [];
   for (const ch of text.replace(/\r\n/g, "\n")) {
     if (ch === "\n") {
@@ -360,15 +374,158 @@ function typeInto(hwnd, text, enter) {
   return { typed: events.length / 2 };
 }
 
-if (require.main === module) {
+// ---------- bringing a terminal forward (the "Claude finished" card) ----------
+
+function windowTitle(h) {
+  const buf = Buffer.alloc(1024 * 2);
+  const n = GetWindowTextW(h, buf, 1024);
+  return buf.toString("utf16le", 0, n * 2).trim();
+}
+
+function className(h) {
+  const buf = Buffer.alloc(256 * 2);
+  const n = GetClassNameW(h, buf, 256);
+  return buf.toString("utf16le", 0, n * 2);
+}
+
+// The window in front: root window, its process and title.
+function foreground() {
+  const root = GetAncestor(GetForegroundWindow(), GA_ROOT);
+  if (isInvalid(root)) return { hwnd: 0, pid: 0, title: "" };
+  const pidOut = [0];
+  GetWindowThreadProcessId(root, pidOut);
+  return { hwnd: hwndNum(root), pid: pidOut[0], title: windowTitle(root) };
+}
+
+// The main window of process `pid`: the topmost visible, unowned, titled top-level window.
+function topWindowOf(pid) {
+  let h = FindWindowExW(null, null, null, null);
+  for (let i = 0; !isInvalid(h) && i < 5000; i++, h = FindWindowExW(null, h, null, null)) {
+    const pidOut = [0];
+    GetWindowThreadProcessId(h, pidOut);
+    if (pidOut[0] !== pid || !IsWindowVisible(h) || !isInvalid(GetWindow(h, 4 /* GW_OWNER */)) || !GetWindowTextLengthW(h)) continue;
+    return hwndNum(h);
+  }
+  return 0;
+}
+
+// Processes in the chain whose windows are never "the terminal".
+const NOT_HOSTS = new Set(["explorer.exe", "svchost.exe", "services.exe", "wininit.exe", "sihost.exe", "userinit.exe"]);
+
+// Where the console of `pid` is shown: { hwnd, title (the console's), host (exe name) }.
+//   classic conhost: the console window itself (it is its own root owner);
+//   ConPTY (Windows Terminal, VS Code): the window that owns the hidden pseudo-console window;
+//   unowned pseudo-console (IntelliJ): the host process's main window.
+// Without a console (Claude in an IDE panel rather than a terminal), the nearest process of
+// `chain` that has a window.
+function locate(pid, chain = []) {
+  const procs = processes();
+  let hwnd = 0, title = "", host = "";
+  if (pid && procs.has(pid)) {
+    FreeConsole();
+    if (AttachConsole(pid)) {
+      title = consoleTitle();
+      const con = GetConsoleWindow();
+      if (!isInvalid(con)) {
+        const owner = GetAncestor(con, GA_ROOTOWNER);
+        if (!isInvalid(owner) && IsWindowVisible(owner) && className(owner) !== "PseudoConsoleWindow") hwnd = hwndNum(owner);
+      }
+      FreeConsole();
+    }
+    const hostProc = procs.get(procs.get(pid).ppid);
+    host = hostProc?.name ?? "";
+    if (!hwnd && hostProc && !NOT_HOSTS.has(host.toLowerCase())) hwnd = topWindowOf(hostProc.pid);
+  }
+  for (const p of chain) {
+    if (hwnd) break;
+    const name = procs.get(p)?.name ?? "";
+    if (!name || NOT_HOSTS.has(name.toLowerCase())) continue;
+    hwnd = topWindowOf(p);
+    if (hwnd) host = name;
+  }
+  return { hwnd, title, host };
+}
+
+// Selects the Windows Terminal tab named `tabName` (a renamed tab, see tabnames.cjs) or showing
+// `title`, through UI Automation (from PowerShell: the COM interfaces are far simpler from .NET
+// than through FFI; about 0.4 s). A window with one tab, or no such tab, is left as it is.
+// -> "selected" | "single" | "notfound" | "" (failed)
+const SELECT_TAB_PS = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+function norm($s) { return ($s -replace '^[^\\p{L}\\p{N}]+', '').Trim() }
+$want = norm $env:CTA_TITLE
+$tabName = norm $env:CTA_TAB
+$A = [System.Windows.Automation.AutomationElement]
+$win = $A::FromHandle([IntPtr][long]$env:CTA_HWND)
+$cond = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::TabItem)
+$tabs = $win.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+if ($tabs.Count -lt 2) { 'single'; exit }
+foreach ($t in $tabs) {
+  if ($tabName -and (norm $t.Current.Name) -eq $tabName) {
+    $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    'selected'; exit
+  }
+}
+foreach ($t in $tabs) {
+  $n = norm $t.Current.Name
+  if ($want -and $n -and ($n -eq $want -or $n.Contains($want))) {
+    $t.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    'selected'; exit
+  }
+}
+'notfound'`;
+
+function selectTab(hwnd, title, tabName = "") {
+  const r = require("node:child_process").spawnSync("powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(SELECT_TAB_PS, "utf16le").toString("base64")],
+    { env: { ...process.env, CTA_HWND: String(hwnd), CTA_TITLE: title, CTA_TAB: tabName }, encoding: "utf8", timeout: 8000, windowsHide: true });
+  return (r.stdout ?? "").trim();
+}
+
+// Brings the terminal of console `pid` to the front (see locate), and its tab in Windows Terminal.
+function focusTerminal(pid, chain = [], tabName = "") {
+  SetProcessDpiAwarenessContext(-4);
+  const where = locate(pid, chain);
+  if (!where.hwnd) throw new Error("That terminal has no window any more.");
+  if (!bringToFront(where.hwnd)) throw new Error("Could not bring the terminal to the front.");
+  const tab = where.host.toLowerCase() === "windowsterminal.exe" && (where.title || tabName) ? selectTab(where.hwnd, where.title, tabName) : "";
+  return { ...where, tab };
+}
+
+// `list` plus the names of renamed Windows Terminal tabs (tabnames.cjs): the windows that own
+// Windows Terminal consoles are asked for their tabs (about 0.4 s more).
+async function listWithTabNames(opts) {
+  const { readTabNames, assignTabNames } = require("./tabnames.cjs");
+  const consoles = list(opts);
+  const wt = [...new Set(consoles.filter((c) => c.owner && c.host.toLowerCase() === "windowsterminal.exe").map((c) => c.owner))];
+  return assignTabNames(consoles, await readTabNames(wt));
+}
+
+// `at`, and when the clicked window holds several tabs whose titles don't decide (the active tab
+// was renamed: the window title is its name), the tab names do.
+async function atWithTabNames(x, y) {
+  const r = at(x, y);
+  if (!r.ambiguous) return r;
+  const { readTabNames, assignTabNames } = require("./tabnames.cjs");
+  const owners = [...new Set(r.candidates.map((c) => c.owner).filter(Boolean))];
+  const named = assignTabNames(r.candidates, await readTabNames(owners));
+  const win = normTitle(r.windowTitle).toLowerCase();
+  const hit = named.filter((c) => c.tabName && normTitle(c.tabName).toLowerCase() === win);
+  return hit.length === 1 ? hit[0] : { ...r, candidates: named };
+}
+
+if (require.main === module) (async () => {
   const [cmd, ...args] = process.argv.slice(2);
   try {
     let result;
-    if (cmd === "list") result = list({ all: args.includes("--all") });
-    else if (cmd === "at") result = at(Number(args[0]), Number(args[1]));
+    if (cmd === "list") result = await listWithTabNames({ all: args.includes("--all") });
+    else if (cmd === "at") result = await atWithTabNames(Number(args[0]), Number(args[1]));
     else if (cmd === "capture") result = capture(...args.slice(0, 4).map(Number), args[4]);
     else if (cmd === "send") result = send(Number(args[0]), Buffer.from(args[1] ?? "", "base64").toString("utf8"), args[2] === "1");
     else if (cmd === "window") result = windowAt(Number(args[0]), Number(args[1]));
+    else if (cmd === "foreground") result = foreground();
+    else if (cmd === "focus") result = focusTerminal(Number(args[0]) || 0, String(args[1] ?? "").split(",").map(Number).filter((p) => p > 0), Buffer.from(args[2] ?? "", "base64").toString("utf8"));
     else if (cmd === "type") result = typeInto(Number(args[0]), Buffer.from(args[1] ?? "", "base64").toString("utf8"), args[2] === "1");
     else throw new Error(`Unknown command: ${cmd}`);
     process.stdout.write(JSON.stringify({ ok: true, result }));
@@ -376,6 +533,6 @@ if (require.main === module) {
     process.stdout.write(JSON.stringify({ ok: false, error: err.message }));
     process.exitCode = 1;
   }
-}
+})();
 
-module.exports = { list, at, capture, send, windowAt, typeInto, processes, consolePids };
+module.exports = { list, at, capture, send, windowAt, typeInto, processes, consolePids, foreground, locate, focusTerminal };

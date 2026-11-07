@@ -190,7 +190,7 @@ function bar(pct, width = 10) {
   return color("▰".repeat(filled)) + C.faint("▱".repeat(width - filled));
 }
 
-// Colored segments for the status line. `opts` comes from config.json "statusLine":
+// Colored segments for the status line. `opts` comes from the settings' "statusLine":
 //   showNext (default true): the "next ~$X" / "cold $Y" estimate before the session total.
 function segments(info, { showNext = true } = {}) {
   const out = [];
@@ -248,10 +248,11 @@ function readStdinJson() {
   try { return JSON.parse(fs.readFileSync(0, "utf8")); } catch { return null; }
 }
 
-// The "statusLine" section of the repo's config.json; missing file or section means defaults.
+// The "statusLine" section of the settings (config-store.cjs); missing means defaults.
 function statusLineConfig() {
   try {
-    return JSON.parse(fs.readFileSync(path.join(__dirname, "..", "config.json"), "utf8")).statusLine ?? {};
+    const { DATA_DIR, loadConfig } = require("./config-store.cjs");
+    return loadConfig(DATA_DIR, path.join(__dirname, "..")).statusLine ?? {};
   } catch {
     return {};
   }

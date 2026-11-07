@@ -7,10 +7,10 @@ const { acceleratorKey, uiohookKey, shortcutRecorder } = require("../src/keys.js
 const { terminalLabel, keycaps, buttonName } = require("../src/labels.cjs");
 const { micBitmap, micDistance, appIconBitmap } = require("../src/tray-icon.cjs");
 
-const CONFIG_FILE = path.join(__dirname, "..", "config.json");
+const CONFIG_FILE = path.join(__dirname, "..", "config.default.json");
 const KEY_NAMES = ["A", "F13", "Ctrl", "CtrlRight", "Space", "1"];
 
-test("formatConfig writes config.json back exactly as it is", () => {
+test("formatConfig writes config.default.json back exactly as it is", () => {
   const text = fs.readFileSync(CONFIG_FILE, "utf8");
   assert.strictEqual(`${formatConfig(JSON.parse(text))}\n`, text.replace(/\r\n/g, "\n"));
   assert.strictEqual(formatConfig({ a: [], b: {} }), '{ "a": [], "b": {} }');
@@ -87,10 +87,16 @@ test("app icon: rounded tile, light microphone, ember lamp", () => {
   const size = 64, b = appIconBitmap(size);
   const px = (x, y) => [...b.subarray((y * size + x) * 4, (y * size + x) * 4 + 4)]; // BGRA
   assert.strictEqual(px(0, 0)[3], 0); // rounded corner is transparent
-  assert.ok(px(29, 26).slice(0, 3).every((c) => c > 220)); // microphone body in light ink
-  const lamp = px(49, 15);
-  assert.ok(lamp[2] > 230 && lamp[1] > 90 && lamp[1] < 200 && lamp[0] < 120); // ember lamp (BGRA: R high, G mid, B low)
+  const orange = (p) => p[2] > 230 && p[1] > 90 && p[1] < 160 && p[0] < 60; // BGRA: R high, G mid, B low
+  assert.ok(orange(px(22, 32))); // the prompt chevron, near its tip
+  assert.ok(px(39, 32).slice(0, 3).every((c) => c > 220)); // the tallest wave bar in light ink
   assert.ok(px(6, 40).slice(0, 3).every((c) => c < 70)); // graphite tile
+  // 16 px: three 1 px bars on whole pixels with a clear gap between them, not one white block.
+  const small = appIconBitmap(16);
+  const at = (x, y) => [...small.subarray((y * 16 + x) * 4, (y * 16 + x) * 4 + 3)];
+  assert.ok(at(10, 8).every((c) => c > 200)); // middle bar
+  assert.ok(at(9, 8).every((c) => c < 90) && at(11, 8).every((c) => c < 90)); // the gaps beside it
+
 });
 
 test("terminals shortcut: a key with modifiers, off, or an error", () => {

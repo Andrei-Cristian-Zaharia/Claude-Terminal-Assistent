@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* "Claude finished" / "Claude needs you" cards in a corner of the screen (config notify.position),
+     newest first; the card look is in theme.css, shared with the accept/reject toast. This window
+     never takes the focus (a game may be in front): main handles hover and clicks from the global
+     mouse hook. This page draws, and reports where each card and its close button are. */
+  html, body { background: transparent; overflow: hidden; }
+  .card.hover .open { color: var(--accent-soft); }
+</style>
+</head>
+<body>
+<div class="stack" id="stack"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => Object.assign(document.createElement(tag), cls ? { className: cls } : {}, text !== undefined ? { textContent: text } : {});
+let total = 1, endsAt = 0, remaining = 0, raf = 0;
+
+function drawTimer() {
+  const bar = document.querySelector(".timer");
+  if (!bar) return;
+  const left = Math.max(0, endsAt ? endsAt - Date.now() : remaining);
+  bar.style.transform = `scaleX(${total ? left / total : 0})`;
+  if (endsAt && left > 0) raf = requestAnimationFrame(drawTimer);
+}
+
+done.onState(({ cards, seconds }) => {
+  total = seconds * 1000;
+  const stack = $("stack");
+  // The countdown bar sits on the newest "finished" card; cards asking for a permission stay up.
+  const timed = cards.find((c) => c.kind === "done")?.id; // "Update ready" stays up too
+  stack.replaceChildren(...cards.map((c) => {
+    const ask = c.kind === "ask";
+    const update = c.kind === "update";
+    const card = el("div", "card");
+    card.dataset.id = c.id;
+    const header = el("header");
+    header.append(
+      // No .pulse here: an endless animation kept this transparent window from showing.
+      Object.assign(el("span", "lamp"), { style: `--lamp: var(${ask ? "--busy" : "--ready"})` }),
+      el("span", ask ? "label busy" : "label", ask ? "Claude needs you" : update ? "Update ready" : "Claude finished"),
+      el("span", "time", c.time),
+    );
+    card.append(
+      header,
+      el("div", "title", c.title),
+      el("div", "where", [c.where, c.project].filter(Boolean).join(" · ")),
+      el("div", "text", c.text),
+      el("div", "foot open", ask ? "Click to answer in the terminal" : update ? "Click to restart and update" : "Click to open"),
+      Object.assign(el("button", "close", "✕"), { tabIndex: -1 }),
+    );
+    if (c.id === timed) card.append(el("div", "timer"));
+    return card;
+  }));
+  requestAnimationFrame(() => {
+    const box = (r) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    done.layout({
+      height: Math.ceil(stack.getBoundingClientRect().height),
+      cards: [...stack.children].map((c) => ({
+        id: Number(c.dataset.id), rect: box(c.getBoundingClientRect()), close: box(c.querySelector(".close").getBoundingClientRect()),
+      })),
+    });
+  });
+  drawTimer(); // the new bar starts where the old one was
+});
+
+done.onRun(({ remaining: ms }) => {
+  document.body.classList.remove("paused");
+  endsAt = Date.now() + ms;
+  cancelAnimationFrame(raf);
+  drawTimer();
+});
+done.onPause(({ remaining: ms }) => {
+  document.body.classList.add("paused");
+  cancelAnimationFrame(raf);
+  endsAt = 0;
+  remaining = ms;
+  drawTimer();
+});
+// hit: { id, part: "card" | "close" } or null
+done.onHover((hit) => {
+  for (const c of document.querySelectorAll(".card")) {
+    const on = hit && Number(c.dataset.id) === hit.id;
+    c.classList.toggle("hover", !!on);
+    c.querySelector(".close").classList.toggle("hover", !!on && hit.part === "close");
+  }
+});
+</script>
+</body>
+</html>

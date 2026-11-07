@@ -108,7 +108,8 @@ menu.onState((s) => {
     b.setAttribute("aria-checked", String(t.selected));
     b.dataset.pid = t.pid;
     b.append(el("span", "radio"), el("span", "title", t.title));
-    if (t.claude) b.append(el("span", "chip", "Claude"));
+    if (t.status) b.append(el("span", `chip ${t.status.state}`, t.status.text));
+    else if (t.claude) b.append(el("span", "chip", "Claude"));
     b.append(el("span", "where", t.where));
     b.addEventListener("click", () => menu.act({ type: "select", pid: t.pid }));
     return b;

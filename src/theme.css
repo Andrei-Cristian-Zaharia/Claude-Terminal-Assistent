@@ -23,6 +23,7 @@
   --idle: #8d9097;
   --focus: var(--accent-soft);
   --danger: #ff6b6b;
+  --done: #4ade80;      /* "Done" next to a Claude terminal; the status line's green */
   color-scheme: dark;
 }
 
@@ -83,7 +84,15 @@ button.quiet { background: transparent; border-color: transparent; color: var(--
 button.quiet:hover { background: var(--raised); color: var(--ink); }
 
 /* The "Claude" mark on terminals running Claude Code. */
-.chip { font-size: 11px; color: var(--accent-soft); border: 1px solid #5a4232; border-radius: 4px; padding: 0 6px; }
+.chip { font-size: 11px; color: var(--accent-soft); border: 1px solid #5a4232; border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+/* What Claude is doing there (labels.statusChip): working, waiting for a permission (gold like the
+   "Claude needs you" card), done, idle. Static: no animation in these transparent windows. */
+.chip.working::before { content: "◐ "; }
+.chip.ask { color: var(--busy); border-color: color-mix(in srgb, var(--busy) 45%, transparent); font-weight: 600; }
+.chip.ask::before { content: "● "; }
+.chip.done { color: var(--done); border-color: color-mix(in srgb, var(--done) 35%, transparent); }
+.chip.done::before { content: "✓ "; }
+.chip.idle { color: var(--faint); border-color: var(--line); }
 
 /* On/off switch: a real checkbox, drawn as a track. */
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }
@@ -104,3 +113,34 @@ body.loading .switch span, body.loading .switch span::after { transition: none; 
 
 /* Native form controls in the settings window. */
 input[type="range"] { accent-color: var(--accent); }
+
+/* Corner cards: the accept/reject toast (confirm.html) and the "Claude finished" cards
+   (done.html) share this look. The windows are transparent; .stack gives the shadow room. */
+.stack { display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.card {
+  position: relative; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5); overflow: hidden; padding: 11px 12px 12px 14px;
+  transition: border-color .12s, background .12s;
+}
+.card.hover { border-color: var(--accent); background: color-mix(in srgb, var(--surface) 92%, var(--accent)); }
+.card header { display: flex; align-items: center; gap: 8px; padding-right: 26px; font-size: 12px; }
+.card header .label { color: var(--accent-soft); font-weight: 600; }
+.card header .label.busy { color: var(--busy); }
+.card header .time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.card .title { margin-top: 6px; font-size: 14px; color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .where { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .where:empty { display: none; }
+.card .text {
+  margin-top: 7px; font-size: 13px; line-height: 1.45; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+}
+.card .text:empty { display: none; }
+.card .foot { margin-top: 7px; font-size: 11px; color: var(--faint); }
+.card .close {
+  position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; padding: 0; border-radius: 5px;
+  display: grid; place-items: center; background: transparent; border-color: transparent; color: var(--faint); font-size: 14px; line-height: 1;
+}
+.card .close.hover { background: var(--hover); color: var(--ink); }
+/* Time left: a thin bar along the bottom edge that shrinks to the left; gray while paused. */
+.card .timer { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--accent); transform-origin: left; }
+.paused .card .timer { background: var(--faint); }

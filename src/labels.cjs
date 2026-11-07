@@ -19,20 +19,46 @@ const hostName = (exe = "") => HOSTS[exe.toLowerCase()] ?? (exe ? exeTitle(exe) 
 
 // The console title without the status glyphs Claude Code animates in front (✳ ◐ ⠋ …). A title
 // that is only the shell's own path ("C:\WINDOWS\system32\cmd.exe") says nothing: use the shell name.
-function terminalTitle(t) {
+function consoleTitle(t) {
   const title = (t.title ?? "").trim().replace(/^[^\p{L}\p{N}]+/u, "").trim();
-  if (!title || /^[a-z]:\\.*\.exe\s*$/i.test(title)) return shellName(t.shell);
+  if (!title || /^[a-z]:\\.*\.exe\s*$/i.test(title)) return "";
   return title;
 }
 
-// What the menu shows for one terminal.
+// The name the person gave the tab (tabnames.cjs) comes first, then the console title.
+function terminalTitle(t) {
+  return t.tabName?.trim() || consoleTitle(t) || shellName(t.shell);
+}
+
+// What the menu shows for one terminal. A renamed tab keeps its console title (for Claude Code,
+// the session name) next to where it runs.
 function terminalLabel(t) {
+  const inner = t.tabName?.trim() ? consoleTitle(t) : "";
   return {
     pid: t.pid,
     title: terminalTitle(t),
-    where: `${shellName(t.shell)} in ${hostName(t.host)}`,
+    where: `${shellName(t.shell)} in ${hostName(t.host)}${inner && inner !== t.tabName.trim() ? ` · ${inner}` : ""}`,
     claude: (t.processes ?? []).some((p) => p.toLowerCase() === "claude.exe"),
   };
+}
+
+// The chip next to a Claude terminal in the lists (status from tasks.claudeStatus).
+// -> { state, text } or null
+function statusChip(status, now = Date.now()) {
+  if (!status) return null;
+  if (status.state === "working") return { state: "working", text: "Working" };
+  if (status.state === "ask") return { state: "ask", text: "Needs you" };
+  if (status.state === "done") return { state: "done", text: status.at ? `Done · ${ago(now - status.at)}` : "Done" };
+  return { state: "idle", text: "Idle" };
+}
+
+// 40 s -> "now", 3 min -> "3m", 2 h -> "2h", 3 days -> "3d".
+function ago(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return `${m}m`;
+  if (m < 48 * 60) return `${Math.floor(m / 60)}h`;
+  return `${Math.floor(m / 1440)}d`;
 }
 
 // "Control+Alt+Space" -> ["Ctrl", "Alt", "Space"], for keycaps.
@@ -42,4 +68,4 @@ const keycaps = (accelerator = "") => accelerator.split("+").map((k) => k.trim()
 const BUTTONS = { 1: "Left", 2: "Right", 3: "Middle", 4: "Back", 5: "Forward" };
 const buttonName = (n) => BUTTONS[n] ?? `Button ${n}`;
 
-module.exports = { shellName, hostName, terminalTitle, terminalLabel, keycaps, buttonName };
+module.exports = { shellName, hostName, terminalTitle, terminalLabel, statusChip, keycaps, buttonName };

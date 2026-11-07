@@ -46,7 +46,8 @@ chooser.onState(({ terminals, hint, highlight }) => {
   const rows = terminals.map((t, i) => {
     const r = el("div", `row${t.selected ? " current" : ""}${i === highlight ? " hover" : ""}`);
     r.append(el("span", "radio"), el("span", "title", t.title));
-    if (t.claude) r.append(el("span", "chip", "Claude"));
+    if (t.status) r.append(el("span", `chip ${t.status.state}`, t.status.text));
+    else if (t.claude) r.append(el("span", "chip", "Claude"));
     r.append(el("span", "where", t.where));
     return r;
   });

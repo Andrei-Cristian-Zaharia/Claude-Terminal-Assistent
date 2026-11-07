@@ -11,15 +11,16 @@
   "select": { "mouseButton": 4 },
   "screenshotsDir": "",
   "silenceLevel": 0.015,
-  "statusLine": { "showNext": false },
+  "statusLine": { "showNext": true },
   "screenRecord": { "intervalMs": 1000, "maxFrames": 10, "maxWidth": 1920 },
   "whisper": {
-    "server": "C:\\Users\\Andrei\\Desktop\\AI Assistent\\data\\whisper\\bin-gpu\\Release\\whisper-server.exe",
-    "model": "C:\\Users\\Andrei\\Desktop\\AI Assistent\\data\\whisper\\models\\ggml-large-v3-turbo.bin",
-    "language": "romanian",
+    "server": "",
+    "model": "",
+    "language": "auto",
     "port": 8178,
     "threads": 4,
     "idleUnloadMinutes": 15
   },
-  "confirm": { "enabled": true, "seconds": 3 }
+  "confirm": { "enabled": true, "seconds": 3, "position": "bottom-right" },
+  "notify": { "enabled": true, "seconds": 15, "sound": true, "position": "bottom-right" }
 }

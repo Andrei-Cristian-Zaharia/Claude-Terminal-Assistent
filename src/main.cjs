@@ -1,25 +1,31 @@
 // Tray app: pick a target terminal, then press the global hotkey anywhere (even in a game) to
 // dictate a command. Flow: hotkey -> record (hidden window) -> local Whisper -> typed into target.
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { app, Tray, BrowserWindow, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
+const { app, Tray, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
 const { uIOhook, UiohookKey } = require("uiohook-napi");
 const { Whisper, isHallucination, peakLevel } = require("./whisper.cjs");
 const screenrec = require("./screenrec.cjs");
 const { grab } = require("./screen-grab.cjs");
-const { terminalLabel, keycaps, buttonName } = require("./labels.cjs");
+const { terminalLabel, statusChip, keycaps, buttonName } = require("./labels.cjs");
 const { RESTART_KEYS, needsRestart, validate, formatConfig } = require("./settings-model.cjs");
 const { trayIcon } = require("./tray-icon.cjs");
 const { createLog, hookConsole } = require("./log.cjs");
-const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow } = require("./terminals.cjs");
+const { listTerminals: listConsoles, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow, foregroundWindow, focusTerminal } = require("./terminals.cjs");
+const tasks = require("./tasks.cjs");
+const corners = require("./corners.cjs");
+const { startMouseGuard } = require("./mouse-guard.cjs");
 
 const ROOT = path.join(__dirname, "..");
-const CONFIG_FILE = path.join(ROOT, "config.json");
+const { loadConfig } = require("./config-store.cjs");
+const claudeSetup = require("./claude-setup.cjs");
 const APP_ICON = path.join(ROOT, "assets", "icon.png"); // npm run icon
 const MIN_WAV_BYTES = 44 + 16000 * 2 * 0.3; // ignore taps shorter than 0.3 s
 
 const APP_NAME = "Claude Terminal Assistant";
+const APP_ID = "com.zaharia.claude-terminal-assistant"; // the installer's appId (package.json build.appId)
 
 // Data (state.json, screenshots) lives in %APPDATA%\claude-terminal-assistant: no spaces, because
 // screenshot paths are typed into terminals. Before the rename it was terminal-claude-helper; it is
@@ -40,6 +46,26 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
     }
   }
   app.setPath("userData", dataDir);
+}
+
+// Settings: %APPDATA%claude-terminal-assistantconfig.json (config-store.cjs), defaults from
+// config.default.json. In the data folder so an installed app keeps them across updates.
+const CONFIG_FILE = path.join(app.getPath("userData"), "config.json");
+
+// The uninstaller runs the exe with --uninstall-cleanup before it removes the files (not on an
+// update): Claude Code and the shells are disconnected and the Start with Windows entry is
+// removed, since both would point at a program that is gone.
+if (process.argv.includes("--uninstall-cleanup")) {
+  try {
+    claudeSetup.connect({
+      dataDir: app.getPath("userData"), appDir: ROOT, exe: process.execPath, uninstall: true,
+      shotsDir: loadConfig(app.getPath("userData"), ROOT).screenshotsDir || path.join(app.getPath("userData"), "screenshots"),
+    });
+  } catch {}
+  for (const name of [APP_NAME, "Terminal Claude Helper"]) {
+    try { app.setLoginItemSettings({ path: process.execPath, args: [], name, openAtLogin: false }); } catch {}
+  }
+  app.exit(0);
 }
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -76,10 +102,11 @@ app.on("web-contents-created", (_e, wc) => {
 // quits at once, so show this one's menu to make clear it is there.
 app.on("second-instance", () => { if (tray && menuWin) showMenu(); });
 
-// Start with Windows (config "startAtLogin", default on): a per-user Run entry that launches this
-// Electron with the project folder, straight into the tray. Written at every start so it follows
-// the project if it moves; turning the setting off removes it.
-const LOGIN_ITEM = { path: process.execPath, args: [app.getAppPath()], name: APP_NAME };
+// Start with Windows (config "startAtLogin", default on): a per-user Run entry that launches the
+// app straight into the tray: the installed exe, or from a source checkout this Electron with the
+// project folder. Written at every start so it follows the app if it moves; turning the setting
+// off removes it.
+const LOGIN_ITEM = { path: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], name: APP_NAME };
 function applyStartAtLogin() {
   try {
     app.setLoginItemSettings({ ...LOGIN_ITEM, name: "Terminal Claude Helper", openAtLogin: false }); // the name before the rename
@@ -89,7 +116,7 @@ function applyStartAtLogin() {
   }
 }
 
-const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+const cfg = loadConfig(app.getPath("userData"), ROOT);
 const whisper = new Whisper(cfg.whisper);
 const stateFile = () => path.join(app.getPath("userData"), "state.json");
 
@@ -116,6 +143,8 @@ const BEEPS = {
   screenOn: [[700, 60], [1050, 80]],
   confirm: [[880, 50]],
   screenOff: [[1050, 60], [700, 80]],
+  done: [[523, 70], [659, 70], [784, 130]], // Claude finished in a terminal
+  ask: [[784, 90], [784, 90], [523, 160]], // Claude waits for a permission
 };
 const beep = (name) => recorderWin?.webContents.send("rec:beep", BEEPS[name]);
 
@@ -450,12 +479,14 @@ async function selectAt(x, y) {
 function setTarget(t) {
   // Only a console record from the helper can be a target; anything else is a programming error.
   if (!t?.pid) return fail(`Could not select that terminal (no pid in ${JSON.stringify(t)?.slice(0, 80)}).`);
-  target = t;
+  // A click on a window gives no tab names; the last listing may know this one's.
+  const known = terminals.find((x) => x.pid === t.pid);
+  target = t.tabName || !known?.tabName ? t : { ...t, tabName: known.tabName };
   saveState();
   refreshTray();
   beep("sent");
-  showOverlay("ok", `Target: ${t.title || t.shell}`, 2000);
-  console.log(`[select] ${describe(t)}`);
+  showOverlay("ok", `Target: ${terminalLabel(target).title}`, 2000);
+  console.log(`[select] ${describe(target)}`);
 }
 
 // The clicked window holds several terminals and nothing tells which tab is showing (IntelliJ's
@@ -515,7 +546,23 @@ function saveState() {
 const ICONS = Object.fromEntries(["idle", "notarget", "recording", "transcribing"].map((k) => [k, trayIcon(nativeImage, k)]));
 ICONS.confirming = ICONS.transcribing;
 
-const describe = (t) => `${t.title || t.shell} (${t.shell}${t.host ? ` in ${t.host}` : ""}, pid ${t.pid})`;
+// What Claude is doing in each terminal, for the lists: the console title says working or not;
+// the hooks' last event per terminal pid ({ kind: "ask" | "done", at }, set in onTaskDone) tells
+// "needs you" and "done" from idle (tasks.claudeStatus). Every listing keeps it current.
+const claudeEvents = new Map();
+async function listTerminals() {
+  const list = await listConsoles();
+  tasks.updateEvents(claudeEvents, list);
+  return list;
+}
+// One row of the tray menu or the terminal chooser.
+const rowLabel = (t) => ({
+  ...terminalLabel(t),
+  status: statusChip(tasks.claudeStatus(t, claudeEvents.get(t.pid))),
+  selected: target?.pid === t.pid,
+});
+
+const describe = (t) => `${t.tabName ? `[${t.tabName}] ` : ""}${t.title || t.shell} (${t.shell}${t.host ? ` in ${t.host}` : ""}, pid ${t.pid})`;
 
 function refreshTray() {
   const icon = phase !== "idle" ? ICONS[phase] : target ? ICONS.idle : ICONS.notarget;
@@ -562,7 +609,7 @@ function sendMenuState() {
   menuWin.webContents.send("menu:state", {
     phase,
     target: target ? terminalLabel(target) : null,
-    terminals: terminals.map((t) => ({ ...terminalLabel(t), selected: target?.pid === t.pid })),
+    terminals: terminals.map(rowLabel),
     hotkey: keycaps(cfg.hotkey),
     selectHint: selectHint(),
     pressEnter: !!cfg.pressEnter,
@@ -641,6 +688,133 @@ function openSettings() {
   settingsWin.loadFile(path.join(__dirname, "settings.html"));
 }
 
+// ---------- speech recognition setup ----------
+// setup.html: shown at startup while whisper.cpp or its model is missing (a fresh install), from
+// Settings > Speech recognition, and when a recording starts without it. It downloads the server
+// (the NVIDIA or the CPU build, found in whisper.cpp's releases, whisper-setup.cjs) and a model
+// into %LOCALAPPDATA%\claude-terminal-assistant\whisper (local, not roaming: the model is large),
+// or takes files already on the PC; then it starts Whisper once to check it works.
+const WHISPER_DIR = path.join(process.env.LOCALAPPDATA ?? app.getPath("appData"), "claude-terminal-assistant", "whisper");
+const ws = require("./whisper-setup.cjs");
+let setupWin = null;
+let setupAbort = null;
+let releasesCache = null;
+const whisperFilesOk = () => [cfg.whisper?.server, cfg.whisper?.model].every((f) => f && fs.existsSync(f));
+
+function openSetup() {
+  if (setupWin && !setupWin.isDestroyed()) { setupWin.show(); setupWin.focus(); return; }
+  setupWin = new BrowserWindow({
+    width: 620, height: 820, minWidth: 520, minHeight: 520, show: false, title: "Set up speech recognition",
+    backgroundColor: "#1f2023", autoHideMenuBar: true, icon: APP_ICON,
+    webPreferences: { preload: path.join(__dirname, "setup-preload.cjs") },
+  });
+  setupWin.setMenu(null);
+  setupWin.once("ready-to-show", () => setupWin.show());
+  setupWin.on("closed", () => { setupAbort?.abort(); setupWin = null; });
+  setupWin.loadFile(path.join(__dirname, "setup.html"));
+}
+
+async function whisperReleases(signal) {
+  if (releasesCache) return releasesCache;
+  const res = await fetch(ws.RELEASES_API, { signal, headers: { "User-Agent": "claude-terminal-assistant", Accept: "application/vnd.github+json" } });
+  if (!res.ok) throw new Error(`Couldn't reach GitHub to find whisper.cpp (HTTP ${res.status}).`);
+  return (releasesCache = await res.json());
+}
+
+// Writes the settings to the data folder.
+function saveConfig() {
+  fs.writeFileSync(CONFIG_FILE, `${formatConfig(cfg)}\n`);
+}
+// A new Whisper setup, applied without a restart.
+function useWhisper(server, model, language) {
+  cfg.whisper = { ...cfg.whisper, server, model, ...(language ? { language } : {}) };
+  saveConfig();
+  whisper.stop();
+  whisper.cfg = cfg.whisper;
+}
+
+ipcMain.handle("setup:info", async () => {
+  let nvidia = "";
+  try {
+    const gpu = await app.getGPUInfo("complete");
+    const dev = (gpu.gpuDevice ?? []).find((d) => d.vendorId === 0x10de);
+    if (dev) nvidia = dev.deviceString || "an NVIDIA card";
+  } catch {}
+  const engineSize = { gpu: 650 * 1024 ** 2, cpu: 8 * 1024 ** 2 }; // replaced by the real sizes when GitHub answers
+  try {
+    const releases = await whisperReleases(AbortSignal.timeout(6000));
+    for (const e of ["gpu", "cpu"]) { const a = ws.pickAsset(releases, e); if (a) engineSize[e] = a.size; }
+  } catch {}
+  return {
+    nvidia, engineSize, models: ws.MODELS, dir: WHISPER_DIR, language: cfg.whisper?.language ?? "auto",
+    defaultModel: { gpu: ws.defaultModel("gpu"), cpu: ws.defaultModel("cpu") },
+    shortcut: `Tap ${keycaps(cfg.hotkey).join("+")}`,
+    current: whisperFilesOk() ? path.basename(cfg.whisper.model) : "",
+  };
+});
+
+ipcMain.handle("setup:start", async (_e, { engine, model, language }) => {
+  setupAbort = new AbortController();
+  const { signal } = setupAbort;
+  const send = (p) => { if (setupWin && !setupWin.isDestroyed()) setupWin.webContents.send("setup:progress", p); };
+  const progress = (step) => {
+    let last = 0;
+    return (done, total) => { const now = Date.now(); if (now - last > 120 || done >= total) { last = now; send({ step, done, total }); } };
+  };
+  try {
+    const asset = ws.pickAsset(await whisperReleases(signal), engine);
+    if (!asset) throw new Error("Couldn't find a Windows build of whisper.cpp to download.");
+    const m = ws.MODELS.find((x) => x.id === model) ?? ws.MODELS[0];
+    console.log(`[setup] ${asset.name} (${asset.tag}) + ${m.file}`);
+    const zip = path.join(WHISPER_DIR, "downloads", asset.name);
+    await ws.download(asset.url, zip, { size: asset.size, signal, onProgress: progress("engine") });
+    const modelFile = path.join(WHISPER_DIR, "models", m.file);
+    await ws.download(ws.MODEL_URL(m.file), modelFile, { size: m.size, signal, onProgress: progress("model") });
+    send({ step: "extract" });
+    const binDir = path.join(WHISPER_DIR, `bin-${engine}`);
+    whisper.stop(); // a running server would keep its files locked
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    // Windows' own tar.exe (bsdtar) unpacks zip archives.
+    const tar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    await new Promise((resolve, reject) => require("node:child_process").execFile(tar, ["-xf", zip, "-C", binDir], { windowsHide: true },
+      (err) => (err ? reject(new Error(`Couldn't unpack whisper.cpp: ${err.message}`)) : resolve())));
+    const server = ws.findFile(binDir, "whisper-server.exe");
+    if (!server) throw new Error("The whisper.cpp download has no whisper-server.exe.");
+    fs.rmSync(zip, { force: true });
+    useWhisper(server, modelFile, language);
+    send({ step: "test" });
+    await whisper.start(); // loads the model: a build that can't run here fails now, not at the first dictation
+    send({ step: "ready" });
+    console.log(`[setup] ready: ${server}`);
+    return { ok: true };
+  } catch (err) {
+    if (signal.aborted) return { ok: false, cancelled: true };
+    console.error("[setup]", err);
+    return { ok: false, message: err.message };
+  } finally {
+    setupAbort = null;
+  }
+});
+ipcMain.on("setup:cancel", () => setupAbort?.abort());
+ipcMain.on("setup:close", () => setupWin?.close());
+
+// "I already have whisper.cpp": pick whisper-server.exe, then a model.
+ipcMain.handle("setup:useExisting", async (_e, language) => {
+  const exe = await dialog.showOpenDialog(setupWin, { title: "Choose whisper-server.exe", filters: [{ name: "whisper-server", extensions: ["exe"] }], properties: ["openFile"] });
+  if (exe.canceled || !exe.filePaths[0]) return { ok: false, cancelled: true };
+  const bin = await dialog.showOpenDialog(setupWin, { title: "Choose a Whisper model (.bin)", defaultPath: path.dirname(exe.filePaths[0]), filters: [{ name: "Whisper model", extensions: ["bin"] }], properties: ["openFile"] });
+  if (bin.canceled || !bin.filePaths[0]) return { ok: false, cancelled: true };
+  try {
+    useWhisper(exe.filePaths[0], bin.filePaths[0], language);
+    await whisper.start();
+    return { ok: true, model: path.basename(bin.filePaths[0]) };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+});
+ipcMain.on("settings:openSetup", () => openSetup());
+
 function whisperModels() {
   try {
     const dir = path.dirname(cfg.whisper.model);
@@ -654,6 +828,8 @@ function whisperModels() {
 }
 
 ipcMain.handle("settings:load", () => ({
+  version: app.getVersion(),
+  packaged: app.isPackaged,
   config: structuredClone(cfg),
   models: whisperModels(),
   keyNames: Object.keys(UiohookKey),
@@ -665,9 +841,9 @@ ipcMain.handle("settings:save", (_e, next) => {
   if (errors.length) return { ok: false, errors };
   const restart = needsRestart(cfg, next);
   if (restart && phase !== "idle") return { ok: false, message: "Finish the recording first: saving restarts the helper." };
-  fs.writeFileSync(CONFIG_FILE, `${formatConfig(next)}\n`);
   for (const k of Object.keys(cfg)) delete cfg[k];
   Object.assign(cfg, structuredClone(next));
+  saveConfig();
   saveState(); // pressEnter also lives in state.json
   if (cfg.cursorIndicator === false) hideOverlay();
   applyStartAtLogin();
@@ -678,6 +854,22 @@ ipcMain.handle("settings:save", (_e, next) => {
 });
 
 ipcMain.on("settings:capturing", (_e, on) => pauseHotkeys(!!on));
+
+// "Connect Claude Code" in Settings: the cards' hooks, the status line, the screenshots permission
+// and the shell prompts (claude-setup.cjs). The same as `npm run install-prompt` from a checkout.
+const launcherPaths = () => ({ dataDir: app.getPath("userData"), appDir: ROOT, exe: process.execPath });
+ipcMain.handle("settings:claudeStatus", () => ({ connected: claudeSetup.claudeConnected() }));
+ipcMain.handle("settings:claudeConnect", (_e, on) => {
+  try {
+    const lines = claudeSetup.connect({ ...launcherPaths(), shotsDir: shotsDir(), uninstall: !on,
+      oldDirs: [path.join(app.getPath("appData"), "terminal-claude-helper", "screenshots")] });
+    console.log(`[claude] ${on ? "connected" : "disconnected"}: ${lines.join("; ")}`);
+    return { ok: true, connected: claudeSetup.claudeConnected() };
+  } catch (err) {
+    console.error("[claude]", err);
+    return { ok: false, message: err.message };
+  }
+});
 ipcMain.on("settings:openLog", () => {
   if (!fs.existsSync(LOG.file)) LOG.write("INFO", ["(log opened from Settings)"]);
   shell.openPath(LOG.file);
@@ -714,7 +906,9 @@ function toggleRecording({ allowNoTarget = false } = {}) {
   if (phase === "recording") return stopRecording();
   if (phase !== "idle") return beep("error");
   if (!target && !allowNoTarget) return fail("Pick a target terminal first (right-click the tray icon).");
+  if (!whisperFilesOk()) { openSetup(); return fail("Set up speech recognition first."); }
   phase = "recording";
+  mouseGuard?.setActive(true);
   shots = [];
   frames = [];
   dictation = null;
@@ -733,6 +927,7 @@ function stopRecording() {
   cancelDrag(); // a drag still in progress when recording stops is dropped
   stopScreenRec(); // its frames stay in `frames` for rec:audio
   phase = "transcribing";
+  mouseGuard?.setActive(false);
   refreshTray();
   beep("stop");
   showOverlay("transcribing", "Transcribing…");
@@ -741,6 +936,7 @@ function stopRecording() {
 
 function backToIdle() {
   phase = "idle";
+  mouseGuard?.setActive(false);
   dictation = null;
   refreshTray();
 }
@@ -783,6 +979,7 @@ function cancelRecording() {
   dictation = null;
   discardAudio++;
   phase = "idle";
+  mouseGuard?.setActive(false);
   refreshTray();
   recorderWin.webContents.send("rec:stop");
   hideOverlay();
@@ -858,14 +1055,28 @@ const ENTER_DELAY_MS = 500;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- accept / reject before sending ----------
-// After transcription a toast at the top right of the screen shows the text with Reject and
-// Accept. Accept counts down (config "confirm.seconds", default 3) and fires on its own. The
+// After transcription a toast in a corner of the screen (config "confirm.position", default bottom
+// right; see corners.cjs) shows the text with Reject and Accept, on the same card as the "Claude
+// finished" notifications. Accept counts down (config "confirm.seconds", default 3) and fires on its own. The
 // toast never takes the focus; clicks and hover come from the global hook. Hovering it pauses
 // the countdown so a long text can be read; the recording shortcut or the mouse chord rejects.
 // config "confirm.enabled": false sends straight away, as before.
 let confirmWin = null;
 let pendingConfirm = null; // { resolve, remaining, startedAt, timer, paused, shown, rects }
-const CONFIRM_WIDTH = 400;
+let confirmPlace = null; // { area, height } while the toast is up
+const CONFIRM_WIDTH = 380; // as wide as the "Claude finished" cards, so they line up when stacked
+
+// Places the toast and the "Claude finished" cards in their corners; when they share one, the
+// cards stack beyond the toast. Called whenever either appears, changes height or goes away.
+function placeToasts() {
+  const c = pendingConfirm?.shown && confirmPlace
+    ? { corner: corners.cornerOf(cfg.confirm?.position), area: confirmPlace.area, width: CONFIRM_WIDTH, height: confirmPlace.height } : null;
+  const d = doneCards.length && donePlace
+    ? { corner: corners.cornerOf(cfg.notify?.position), area: donePlace.area, width: DONE_WIDTH, height: donePlace.height } : null;
+  const b = corners.placeToasts({ confirm: c, done: d });
+  if (b.confirm) confirmWin.setBounds(b.confirm);
+  if (b.done) doneWin.setBounds(b.done);
+}
 
 function createConfirm() {
   confirmWin = new BrowserWindow({
@@ -898,9 +1109,9 @@ ipcMain.on("confirm:layout", (_e, { height, accept, reject }) => {
   if (!c || c.shown) return;
   c.shown = true;
   c.rects = { accept, reject };
-  // Top right of the monitor the cursor is on, where a game or editor is being used.
-  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  confirmWin.setBounds({ x: wa.x + wa.width - CONFIRM_WIDTH - 12, y: wa.y + 12, width: CONFIRM_WIDTH, height: Math.round(height) });
+  // On the monitor the cursor is on, where a game or editor is being used.
+  confirmPlace = { area: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea, height };
+  placeToasts();
   confirmWin.showInactive();
   confirmWin.moveTop();
   runConfirm();
@@ -930,6 +1141,8 @@ function resolveConfirm(ok, how) {
   pendingConfirm = null;
   clearTimeout(c.timer);
   confirmWin.hide();
+  confirmPlace = null;
+  placeToasts(); // cards that stacked beyond it move back into the corner
   console.log(`[confirm] ${ok ? "accepted" : "rejected"} (${how})`);
   c.resolve(ok);
 }
@@ -970,9 +1183,263 @@ function setupConfirmHook() {
   });
 }
 
+// ---------- "Claude finished" cards ----------
+// Claude Code runs src/task-done.cjs as a Stop hook (npm run install-prompt) when it finishes
+// answering, and as a Notification hook when it waits for a permission (kind "ask"); the hook sends
+// its ancestor pids, folder and Claude's last message (or the question) over a named pipe.
+// A card in a corner of the screen (config notify.position, default bottom right) says which
+// terminal finished and how; a click on it
+// brings that terminal forward (in Windows Terminal, its tab too). No card when that terminal is
+// already in front. Our own window rather than a Windows notification: those are held back
+// while a full-screen game runs, and this one shows above borderless games. Like the
+// accept/reject toast it never takes the focus; hover and clicks come from the global hook.
+// config "notify": enabled, seconds (until the cards go away; hovering pauses), sound, position.
+let doneWin = null;
+let doneCards = []; // newest first: { id, kind, sessionId, title, where, project, text, time, pid, tabName, chain }
+let doneRects = []; // from done:layout: [{ id, rect, close }], CSS px inside the window
+let donePlace = null; // { area, height }: the display the cards are on (kept while they are up) and their height
+let doneCountdown = null; // { remaining, startedAt, timer, paused }
+let doneSeq = 0;
+const DONE_WIDTH = 380;
+const MAX_CARDS = 3;
+const notifyCfg = () => ({ enabled: true, seconds: 15, sound: true, ...cfg.notify });
+
+function createDone() {
+  doneWin = new BrowserWindow({
+    width: DONE_WIDTH, height: 160, show: false, frame: false, transparent: true, resizable: false,
+    focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, movable: false,
+    webPreferences: { preload: path.join(__dirname, "done-preload.cjs"), backgroundThrottling: false },
+  });
+  doneWin.setAlwaysOnTop(true, "screen-saver");
+  doneWin.setVisibleOnAllWorkspaces(true);
+  return doneWin.loadFile(path.join(__dirname, "done.html"));
+}
+
+function startTaskPipe() {
+  const server = net.createServer((sock) => {
+    let data = "";
+    sock.setEncoding("utf8");
+    sock.setTimeout(5000, () => sock.destroy());
+    sock.on("data", (d) => { data += d; if (data.length > 64 * 1024) sock.destroy(); });
+    sock.on("end", () => {
+      const m = tasks.parseMessage(data);
+      if (m) onTaskDone(m).catch((err) => console.error("[done]", err));
+    });
+    sock.on("error", () => {});
+  });
+  // Another copy (a test run with --user-data-dir) may already hold the pipe.
+  server.on("error", (err) => console.warn(`[done] no "Claude finished" cards: ${err.message}`));
+  server.listen(tasks.PIPE_NAME);
+}
+
+async function onTaskDone(m) {
+  const n = notifyCfg();
+  let list = terminals;
+  try { list = await listTerminals(); terminals = list; } catch (err) { console.error(err); }
+  const t = tasks.findTerminal(list, m.chain);
+  if (t) {
+    claudeEvents.set(t.pid, { kind: m.kind, at: Date.now() });
+    // An open list shows the new state at once.
+    if (menuWin?.isVisible()) sendMenuState();
+    if (chooserWin?.isVisible()) setChooserList(chooserTerminals, chooserHover);
+  }
+  if (n.enabled === false) return; // no cards, but the lists still show the state
+  try {
+    if (tasks.isShowing({ fg: await foregroundWindow(), terminal: t, terminals: list, chain: m.chain })) {
+      return console.log(`[done] ${t ? describe(t) : "Claude"} ${m.kind === "ask" ? "asks" : "finished"}, already in front: no card`);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  const label = t ? terminalLabel(t) : null;
+  const card = {
+    id: ++doneSeq,
+    kind: m.kind,
+    sessionId: m.sessionId,
+    title: label?.title || "Claude Code",
+    where: label?.where ?? "",
+    project: m.cwd ? path.basename(m.cwd) : "",
+    text: tasks.summarize(m.text, m.kind === "ask" ? 300 : 220),
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+    pid: t?.pid ?? 0,
+    tabName: t?.tabName ?? "",
+    chain: m.chain,
+  };
+  // One card per terminal (or session): a newer answer replaces the older card.
+  const same = (c) => (card.pid && c.pid === card.pid) || (card.sessionId && c.sessionId === card.sessionId);
+  doneCards = [card, ...doneCards.filter((c) => !same(c))].slice(0, MAX_CARDS);
+  console.log(`[done] ${t ? describe(t) : "Claude (no terminal found)"} ${m.kind === "ask" ? "asks" : "finished"}: ${JSON.stringify(card.text.slice(0, 80))}`);
+  if (n.sound !== false) beep(m.kind === "ask" ? "ask" : "done");
+  renderDone();
+  restartDoneCountdown();
+}
+
+// Sends the cards to the page, which answers with done:layout; with none left, hides the window.
+function renderDone() {
+  if (!doneCards.length) {
+    clearTimeout(doneCountdown?.timer);
+    doneCountdown = null;
+    doneRects = [];
+    donePlace = null;
+    doneWin.hide();
+    return;
+  }
+  doneWin.webContents.send("done:state", {
+    seconds: notifyCfg().seconds,
+    cards: doneCards.map(({ id, kind, title, where, project, text, time }) => ({ id, kind, title, where, project, text, time })),
+  });
+}
+
+ipcMain.on("done:layout", (_e, { height, cards }) => {
+  doneRects = cards;
+  if (!doneCards.length) return;
+  // In its corner (config notify.position) of the monitor the cursor is on, where a game or editor
+  // is being used; it stays on that monitor while cards are up.
+  donePlace = { area: donePlace?.area ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea, height };
+  placeToasts();
+  if (!doneWin.isVisible()) doneWin.showInactive();
+  doneWin.moveTop();
+});
+
+// The countdown ran out: "finished" cards go; a card asking for a permission stays until it is
+// clicked, closed, or replaced by that terminal's next card, and so does "Update ready".
+function clearDone() {
+  doneCards = doneCards.filter((c) => c.kind === "ask" || c.kind === "update");
+  if (doneCards.length) doneCountdown = null;
+  renderDone();
+}
+
+function restartDoneCountdown() {
+  clearTimeout(doneCountdown?.timer);
+  doneCountdown = { remaining: notifyCfg().seconds * 1000, startedAt: 0, timer: null, paused: false };
+  runDoneCountdown();
+}
+
+function runDoneCountdown() {
+  const c = doneCountdown;
+  c.paused = false;
+  c.startedAt = Date.now();
+  clearTimeout(c.timer);
+  c.timer = setTimeout(clearDone, c.remaining);
+  doneWin.webContents.send("done:run", { remaining: c.remaining });
+}
+
+function pauseDoneCountdown(on) {
+  const c = doneCountdown;
+  if (!c || c.paused === on) return;
+  if (!on) return runDoneCountdown();
+  clearTimeout(c.timer);
+  c.remaining = Math.max(0, c.remaining - (Date.now() - c.startedAt));
+  c.paused = true;
+  doneWin.webContents.send("done:pause", { remaining: c.remaining });
+}
+
+// What is under the hook event's point: { id, part: "card" | "close" }, "panel" (the window, between
+// cards) or null (outside).
+function doneHit(e) {
+  if (!doneCards.length || !doneWin?.isVisible() || !insideWindow(doneWin, e)) return null;
+  const p = screen.screenToDipPoint({ x: e.x, y: e.y });
+  const b = doneWin.getBounds();
+  const x = p.x - b.x, y = p.y - b.y;
+  const inside = (r) => x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+  const card = doneRects.find((c) => inside(c.rect));
+  if (!card) return "panel";
+  return { id: card.id, part: inside(card.close) ? "close" : "card" };
+}
+
+async function openDoneCard(id) {
+  const card = doneCards.find((c) => c.id === id);
+  if (!card) return;
+  doneCards = doneCards.filter((c) => c.id !== id);
+  renderDone();
+  if (card.kind === "update") return installUpdate();
+  try {
+    const r = await focusTerminal(card.pid, card.chain, card.tabName);
+    console.log(`[done] opened ${card.title}${r.tab ? ` (tab: ${r.tab})` : ""}`);
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+function setupDoneHook() {
+  let hovered = null;
+  const key = (h) => (h && typeof h === "object" ? `${h.id}:${h.part}` : null);
+  const move = (e) => {
+    if (!doneCards.length) return;
+    const hit = doneHit(e);
+    pauseDoneCountdown(!!hit);
+    const card = hit && typeof hit === "object" ? hit : null;
+    if (key(card) !== key(hovered)) { hovered = card; doneWin.webContents.send("done:hover", card); }
+  };
+  uIOhook.on("mousemove", move);
+  uIOhook.on("mousedrag", move);
+  uIOhook.on("mousedown", (e) => {
+    if (e.button !== 1) return;
+    const hit = doneHit(e);
+    if (!hit || hit === "panel") return;
+    hovered = null;
+    if (hit.part === "close") {
+      doneCards = doneCards.filter((c) => c.id !== hit.id);
+      renderDone();
+    } else {
+      openDoneCard(hit.id);
+    }
+  });
+}
+
+// ---------- updates ----------
+// The installed app checks the public releases repository (package.json build.publish) a minute
+// after starting and every 6 hours, through electron-updater: a newer version downloads in the
+// background, then an "Update ready" card (it stays up) offers to restart into it; otherwise it
+// installs when the app quits. Settings, hooks and screenshots live in the data folder, so they
+// carry over. A source checkout (npm start) doesn't update itself.
+let updater = null;
+let updateReady = null; // version downloaded and waiting
+function setupUpdates() {
+  if (!app.isPackaged) return;
+  ({ autoUpdater: updater } = require("electron-updater"));
+  updater.logger = { info: (m) => console.log(`[update] ${m}`), warn: (m) => console.warn(`[update] ${m}`), error: (m) => console.error(`[update] ${m}`), debug: () => {} };
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.on("update-downloaded", (info) => {
+    updateReady = info.version;
+    doneCards = [{
+      id: ++doneSeq, kind: "update", title: `Version ${info.version} is ready`, where: `You have ${app.getVersion()}`, project: "",
+      text: "Click to restart into it now. Otherwise it installs when you quit the app.",
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }), pid: 0, chain: [],
+    }, ...doneCards.filter((c) => c.kind !== "update")].slice(0, MAX_CARDS);
+    renderDone();
+    if (notifyCfg().sound !== false) beep("done");
+  });
+  setTimeout(checkForUpdates, 60_000);
+  setInterval(checkForUpdates, 6 * 3600_000);
+}
+// -> { status: "dev" | "none" | "available" | "ready" | "error", version?, message? }
+async function checkForUpdates() {
+  if (!updater) return { status: "dev" };
+  if (updateReady) return { status: "ready", version: updateReady };
+  try {
+    const r = await updater.checkForUpdates();
+    const v = r?.updateInfo?.version;
+    return v && v !== app.getVersion() ? { status: "available", version: v } : { status: "none" };
+  } catch (err) {
+    console.warn(`[update] check failed: ${err.message}`);
+    return { status: "error", message: err.message };
+  }
+}
+function installUpdate() {
+  if (!updater || !updateReady) return;
+  if (phase !== "idle") return fail("Finish the recording first, then restart to update.");
+  console.log(`[update] restarting into ${updateReady}`);
+  setImmediate(() => updater.quitAndInstall(true, true)); // silent install, then start the new version
+}
+ipcMain.handle("settings:checkUpdates", () => checkForUpdates());
+ipcMain.on("settings:installUpdate", () => installUpdate());
+
 // ---------- startup ----------
 app.whenReady().then(async () => {
-  app.setAppUserModelId(APP_NAME);
+  // Notifications are attributed to this id; the installer's shortcuts carry the appId.
+  app.setAppUserModelId(app.isPackaged ? APP_ID : APP_NAME);
   nativeTheme.themeSource = "dark"; // dark title bar on the settings window
   loadState();
 
@@ -990,8 +1457,13 @@ app.whenReady().then(async () => {
   await createMenu();
   await createChooser();
   await createConfirm();
+  await createDone();
+  startTaskPipe();
   pruneScreenshots();
   applyStartAtLogin();
+  // The launchers that Claude Code's hooks, its status line and the shell prompts run (claude-setup.cjs):
+  // rewritten at every start, so they point at this copy of the app, wherever it is installed.
+  try { claudeSetup.writeLaunchers(launcherPaths()); } catch (err) { console.error("[claude]", err); }
 
   tray = new Tray(ICONS.notarget);
   tray.on("click", showMenu);
@@ -1006,11 +1478,45 @@ app.whenReady().then(async () => {
   setupHotkey();
   setupMouseHotkey();
   setupConfirmHook();
+  setupDoneHook();
   setupChooserHook();
   registerTerminalsShortcut();
+  setupUpdates();
+  await setupMouseGuard(); // before uiohook: see mouse-guard.cjs on hook order
   try { uIOhook.start(); } catch (err) { notify(APP_NAME, `Global mouse/key hook failed: ${err.message}`); }
   console.log(`[app] ready. Hotkey ${cfg.hotkey}. Target: ${target ? describe(target) : "none"}`);
+  if (!whisperFilesOk()) openSetup(); // a fresh install: download Whisper first
 });
+
+// ---------- mouse guard ----------
+// While recording, Back/Forward (the chord and the select button) only do the app's things: the
+// guard process drops them before the window under the cursor sees them, so a screenshot drag in
+// a browser doesn't also go back a page (rules in button-guard.cjs). It has to be installed before
+// uiohook; if it ever exits, it is started again and uiohook is restarted after it, to keep that order.
+let mouseGuard = null;
+let guardRestarts = 0;
+async function setupMouseGuard() {
+  const chord = Array.isArray(cfg.mouseHotkey ?? [4, 5]) ? (cfg.mouseHotkey ?? [4, 5]) : [];
+  const select = cfg.select ?? { mouseButton: 4 };
+  const config = { chord, buttons: select.mouseButton ? [select.mouseButton] : [] };
+  try {
+    mouseGuard = await startMouseGuard(config, {
+      onExit: (code) => {
+        console.warn(`[guard] exited (${code})`);
+        mouseGuard = null;
+        if (++guardRestarts > 3) return;
+        setupMouseGuard().then(() => {
+          if (!mouseGuard) return;
+          try { uIOhook.stop(); uIOhook.start(); } catch (err) { console.error(err); }
+          mouseGuard.setActive(phase === "recording");
+        });
+      },
+    });
+    console.log(`[guard] on for buttons ${[...new Set([...config.chord, ...config.buttons])].join(", ")}`);
+  } catch (err) {
+    console.error(`[guard] not started: ${err.message}`); // the buttons then also reach other apps
+  }
+}
 
 // ---------- recording hotkey ----------
 // A normal accelerator ("Control+Alt+Space") goes through globalShortcut (RegisterHotKey).
@@ -1177,7 +1683,7 @@ function setChooserList(list, highlight) {
   chooserHover = highlight;
   hideOverlay(); // the pill would sit on top of the list
   chooserWin.webContents.send("chooser:state", {
-    terminals: list.map((t) => ({ ...terminalLabel(t), selected: target?.pid === t.pid })),
+    terminals: list.map(rowLabel),
     hint: chooserHint(),
     highlight,
   });
@@ -1321,5 +1827,6 @@ app.on("window-all-closed", () => {}); // tray app: keep running
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   try { uIOhook.stop(); } catch {}
+  mouseGuard?.stop();
   whisper.stop();
 });

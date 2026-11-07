@@ -1,4 +1,6 @@
-// The settings window edits config.json. This file holds the parts that are plain data: checking
+const { CORNERS } = require("./corners.cjs");
+
+// The settings window edits the settings (config.json in the data folder, see config-store.cjs). This file holds the parts that are plain data: checking
 // a new config, telling whether it needs a restart, and writing it back in the file's own style.
 
 // Read once at startup (hooks, hotkey registration, the Whisper server's arguments): changing them
@@ -35,13 +37,19 @@ function validate(c, keyNames = []) {
   const cf = c.confirm ?? {};
   if (cf.enabled !== undefined && typeof cf.enabled !== "boolean") bad("confirm.enabled", "Turn asking before sending on or off.");
   if (!isInt(cf.seconds ?? 3, 1, 30)) bad("confirm.seconds", "The countdown must be 1 to 30 seconds.");
+  if (cf.position !== undefined && !CORNERS.includes(cf.position)) bad("confirm.position", "Choose a corner of the screen.");
+  const nt = c.notify ?? {};
+  if (nt.enabled !== undefined && typeof nt.enabled !== "boolean") bad("notify.enabled", "Turn the Claude finished card on or off.");
+  if (nt.sound !== undefined && typeof nt.sound !== "boolean") bad("notify.sound", "Turn the sound on or off.");
+  if (!isInt(nt.seconds ?? 15, 3, 600)) bad("notify.seconds", "Keep the card up for 3 to 600 seconds.");
+  if (nt.position !== undefined && !CORNERS.includes(nt.position)) bad("notify.position", "Choose a corner of the screen.");
   if (!isInt(c.maxRecordSeconds, 5, 600)) bad("maxRecordSeconds", "Recording length must be 5 to 600 seconds.");
   if (!isNum(c.silenceLevel, 0.001, 0.2)) bad("silenceLevel", "The silence threshold must be between 0.001 and 0.2.");
   const sr = c.screenRecord ?? {};
   if (!isInt(sr.intervalMs, 250, 10000)) bad("screenRecord.intervalMs", "Frame interval must be 0.25 to 10 seconds.");
   if (!isInt(sr.maxFrames, 1, 30)) bad("screenRecord.maxFrames", "Keep 1 to 30 frames.");
   const w = c.whisper ?? {};
-  if (typeof w.model !== "string" || !w.model) bad("whisper.model", "Choose a Whisper model.");
+  if (typeof w.model !== "string") bad("whisper.model", "Choose a Whisper model."); // empty: not set up yet
   if (typeof w.language !== "string" || !w.language) bad("whisper.language", "Choose a language.");
   if (!isInt(w.idleUnloadMinutes, 0, 240)) bad("whisper.idleUnloadMinutes", "Unload time must be 0 to 240 minutes.");
   if (!isInt(w.threads, 1, 32)) bad("whisper.threads", "Threads must be 1 to 32.");
