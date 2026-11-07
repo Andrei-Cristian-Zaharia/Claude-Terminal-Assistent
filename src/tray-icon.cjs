@@ -54,9 +54,11 @@ function trayIcon(nativeImage, state) {
 }
 
 // ---------- app icon ----------
-// A graphite tile with the microphone in light ink and the orange state lamp at the top right:
-// the same lamp the tray menu's header lights. Designed on a 32-unit grid, rendered at any size.
+// A terminal prompt whose cursor is a voice: an orange "›" followed by a waveform in light ink, on
+// a graphite tile. Designed on a 32-unit grid, rendered at any size; at 32 px and below the bars
+// sit on whole pixels (three of them at 24 px and below) so the wave stays readable in the taskbar.
 const lerp = (a, b, t) => a + (b - a) * t;
+const mix = (c, d, t) => c.map((v, i) => lerp(v, d[i], t));
 function roundedBox(x, y, x0, y0, x1, y1, r) {
   const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, hx = (x1 - x0) / 2 - r, hy = (y1 - y0) / 2 - r;
   const qx = Math.abs(x - cx) - hx, qy = Math.abs(y - cy) - hy;
@@ -68,6 +70,13 @@ function appIconBitmap(size) {
   const s = size / 32;
   const buf = Buffer.alloc(size * size * 4);
   const cover = (d) => Math.max(0, Math.min(1, 0.5 - d * s)); // d in grid units -> pixel coverage
+  // The wave per size: [x, half height] per bar and the bar radius, in grid units. Small sizes put
+  // the bars on whole pixels with whole-pixel gaps, or they melt into one white block.
+  const { bars, barR, chevR } =
+    size <= 16 ? { bars: [[17, 3.5], [21, 7], [25, 3.5]], barR: 1, chevR: 2 } // 1 px bars, 1 px gaps
+    : size <= 24 ? { bars: [[17.33, 3.6], [21.33, 7.2], [25.33, 3.6]], barR: 1.33, chevR: 2 } // 2 px bars, 1 px gaps
+    : size <= 32 ? { bars: [[16, 3], [20, 7], [24, 4.6], [28, 2.2]], barR: 1, chevR: 1.8 } // 2 px bars, 2 px gaps
+    : { bars: [[16.2, 3.2], [19.6, 7], [23, 4.6], [26.4, 2.2]], barR: 1.35, chevR: 1.7 };
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
       const x = (px + 0.5) / s, y = (py + 0.5) / s;
@@ -77,22 +86,14 @@ function appIconBitmap(size) {
       // Tile: soft top-to-bottom graphite, with a faint rim.
       const t = y / 32;
       let col = [lerp(0x2d, 0x1b, t), lerp(0x2e, 0x1c, t), lerp(0x33, 0x1f, t)]; // graphite
-      const rim = cover(Math.abs(tileD + 0.6) - 0.45) * 0.55;
-      col = col.map((c, i) => lerp(c, [0x4b, 0x4d, 0x55][i], rim));
-      // Microphone, scaled up from the 16-unit tray glyph and centred a little left and low.
-      const k = 1.32;
-      const micA = cover(micDistance((x - 14.6) / k + 8, (y - 17.2) / k + 8.4) * k);
-      col = col.map((c, i) => lerp(c, [0xee, 0xef, 0xf1][i], micA));
-      // Lamp: a gap ring in the tile color, then the green light with a soft halo.
-      const ld = Math.hypot(x - 24.6, y - 7.4);
-      const halo = Math.max(0, 1 - Math.max(0, ld - 2.6) / 3.2) * 0.35;
-      col = col.map((c, i) => lerp(c, [0xff, 0x7a, 0x1a][i], halo * (1 - micA)));
-      const gap = cover(ld - 4.1) * (1 - cover(ld - 2.7));
-      col = col.map((c, i) => lerp(c, [0x22, 0x23, 0x27][i], gap));
-      const lampA = cover(ld - 2.7);
-      // Orange lamp with a lighter core.
-      const core = Math.max(0, 1 - Math.hypot(x - 24.0, y - 6.8) / 1.6);
-      col = col.map((c, i) => lerp(c, lerp([0xff, 0x7a, 0x1a][i], [0xff, 0xd0, 0xa0][i], core * 0.8), lampA));
+      col = mix(col, [0x4b, 0x4d, 0x55], cover(Math.abs(tileD + 0.6) - 0.45) * 0.55);
+      // The prompt: an orange chevron.
+      const chev = Math.min(seg(x, y, 6.6, 10.5, 12.1, 16), seg(x, y, 12.1, 16, 6.6, 21.5)) - chevR;
+      col = mix(col, [0xff, 0x7a, 0x1a], cover(chev));
+      // The cursor: a waveform, bars centred on the middle line.
+      let wave = Infinity;
+      for (const [bx, h] of bars) wave = Math.min(wave, seg(x, y, bx, 16 - h, bx, 16 + h) - barR);
+      col = mix(col, [0xee, 0xef, 0xf1], cover(wave));
       const o = (py * size + px) * 4;
       buf[o] = Math.round(col[2]); buf[o + 1] = Math.round(col[1]); buf[o + 2] = Math.round(col[0]);
       buf[o + 3] = Math.round(tileA * 255);
