@@ -1,0 +1,26 @@
+{
+  "name": "terminal-claude-helper",
+  "version": "1.0.0",
+  "description": "Voice-control a chosen terminal from anywhere with a global hotkey and local Whisper",
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/**/*.test.cjs\"",
+    "terminals": "node src/console-helper.cjs list",
+    "install-prompt": "node scripts/install-prompt.cjs",
+    "icon": "node scripts/make-icon.cjs"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "koffi": "^3.3.7",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3"
+  },
+  "allowScripts": {
+    "koffi@3.3.7": true,
+    "uiohook-napi": false
+  },
+  "private": true
+}

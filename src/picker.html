@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  #box {
+    box-sizing: border-box; width: 100%; padding: 8px 6px 6px; border-radius: 10px;
+    font: 500 12px/1.3 "Segoe UI", system-ui, sans-serif; color: #eeeff1;
+    background: rgba(31, 32, 35, 0.97); box-shadow: 0 4px 16px rgba(0,0,0,.5);
+    border: 1px solid #3b3c42; /* colors from theme.css */
+  }
+  #title { padding: 0 8px 6px; color: #a9acb3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item {
+    display: flex; align-items: baseline; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer;
+    white-space: nowrap; overflow: hidden;
+  }
+  .item:hover, .item.active { background: #34353a; box-shadow: inset 2px 0 0 #ff7a1a; }
+  .key { flex: none; width: 14px; color: #ff7a1a; font-variant-numeric: tabular-nums; }
+  .name { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .procs { flex: none; color: #7d8189; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="box"><div id="title"></div><div id="list"></div></div>
+<script>
+// The clicked window holds several terminals and nothing says which tab is showing (IntelliJ's
+// window title is the project). Main shows this list at the cursor; a click or a digit picks one,
+// Escape or clicking elsewhere (blur) cancels.
+let count = 0;
+picker.onShow(({ windowTitle, candidates }) => {
+  count = candidates.length;
+  document.getElementById("title").textContent = `Which terminal of "${windowTitle}"?`;
+  const list = document.getElementById("list");
+  list.replaceChildren(...candidates.map((c, i) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const key = document.createElement("span");
+    key.className = "key";
+    key.textContent = i < 9 ? String(i + 1) : "";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = c.title?.trim() || c.shell;
+    const procs = document.createElement("span");
+    procs.className = "procs";
+    procs.textContent = c.processes.join(", ");
+    row.append(key, name, procs);
+    row.addEventListener("mousedown", (e) => { e.preventDefault(); picker.pick(i); });
+    return row;
+  }));
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") return picker.cancel();
+  const n = Number(e.key);
+  if (n >= 1 && n <= count) picker.pick(n - 1);
+});
+window.addEventListener("blur", () => picker.cancel());
+</script>
+</body>
+</html>

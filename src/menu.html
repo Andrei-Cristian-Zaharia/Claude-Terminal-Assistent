@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+  html, body { background: transparent; overflow: hidden; }
+  .panel {
+    margin: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45); overflow: hidden;
+  }
+
+  header { padding: 14px 16px 12px; }
+  .status { display: flex; align-items: center; gap: 10px; }
+  .status h1 { margin: 0; font: 600 15px/1.2 "Segoe UI Variable Display", "Segoe UI", sans-serif; flex: 1; }
+  .sub { margin: 6px 0 0 20px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub b { color: var(--ink); font-weight: 600; }
+  .last { margin: 4px 0 0 20px; color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .list { border-top: 1px solid var(--line); padding: 6px; max-height: 300px; overflow-y: auto; }
+  .list h2 { margin: 6px 10px 4px; font-size: 12px; font-weight: 600; line-height: 1.3; color: var(--muted); }
+  .row {
+    display: grid; grid-template-columns: 16px 1fr auto; column-gap: 10px; align-items: center;
+    width: 100%; padding: 7px 10px; text-align: left; border: 0; background: transparent; border-radius: 6px;
+  }
+  .row:hover { background: var(--raised); }
+  .radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--faint); }
+  .row[aria-checked="true"] .radio { border-color: var(--ready); background: radial-gradient(var(--ready) 0 3.5px, transparent 4px); }
+  .row .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .where { grid-column: 2; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { grid-row: 1 / span 2; grid-column: 3; }
+  .empty { margin: 4px 10px 6px; color: var(--muted); }
+  .hint { margin: 2px 10px 6px; color: var(--faint); font-size: 12px; }
+
+  .option { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  .option label { flex: 1; cursor: pointer; }
+
+  footer { display: flex; gap: 6px; align-items: center; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--sunk); }
+  footer .primary { flex: 1; }
+  footer .primary.stop { background: var(--rec); border-color: var(--rec); color: #fff; }
+  footer .primary.stop:hover { background: #ff5370; border-color: #ff5370; }
+</style>
+</head>
+<body class="loading">
+<div class="panel">
+  <header>
+    <div class="status">
+      <span class="lamp" id="lamp"></span>
+      <h1 id="state"></h1>
+      <span class="keys" id="keys" title="Recording shortcut"></span>
+    </div>
+    <div class="sub" id="sub"></div>
+    <div class="last" id="last"></div>
+  </header>
+
+  <div class="list" role="radiogroup" aria-labelledby="list-title">
+    <h2 id="list-title">Terminals</h2>
+    <div id="rows"></div>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <div class="option">
+    <label for="enter">Press Enter after the text</label>
+    <span class="switch"><input type="checkbox" id="enter"><span></span></span>
+  </div>
+
+  <footer>
+    <button class="primary" id="record"></button>
+    <button class="quiet" id="settings">Settings</button>
+    <button class="quiet" id="restart" title="Restart the helper">Restart</button>
+    <button class="quiet" id="quit">Quit</button>
+  </footer>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+const STATES = {
+  recording: { text: "Recording", lamp: "var(--rec)", pulse: true },
+  transcribing: { text: "Transcribing", lamp: "var(--busy)", pulse: true },
+  confirming: { text: "Waiting for your OK", lamp: "var(--busy)" },
+  ready: { text: "Ready", lamp: "var(--ready)" },
+  notarget: { text: "Pick a terminal", lamp: "var(--idle)" },
+};
+
+menu.onState((s) => {
+  const key = s.phase !== "idle" ? s.phase : s.target ? "ready" : "notarget";
+  const st = STATES[key];
+  $("lamp").style.setProperty("--lamp", st.lamp);
+  $("lamp").classList.toggle("pulse", !!st.pulse);
+  $("state").textContent = st.text;
+  $("keys").replaceChildren(...s.hotkey.map((k) => el("span", "keycap", k)));
+
+  const sub = $("sub");
+  sub.replaceChildren();
+  if (s.phase === "recording") sub.textContent = "Press the shortcut again to stop.";
+  else if (s.phase === "transcribing") sub.textContent = "Turning your speech into text…";
+  else if (s.phase === "confirming") sub.textContent = "Accept or reject the text at the top right.";
+  else if (s.target) sub.append("Typing into ", el("b", "", s.target.title));
+  else sub.textContent = "Choose where your dictation goes.";
+  $("last").textContent = s.lastText ? `Last: ${s.lastText}` : "";
+  $("last").hidden = !s.lastText;
+
+  const rows = s.terminals.map((t) => {
+    const b = el("button", "row");
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(t.selected));
+    b.dataset.pid = t.pid;
+    b.append(el("span", "radio"), el("span", "title", t.title));
+    if (t.claude) b.append(el("span", "chip", "Claude"));
+    b.append(el("span", "where", t.where));
+    b.addEventListener("click", () => menu.act({ type: "select", pid: t.pid }));
+    return b;
+  });
+  $("rows").replaceChildren(...(rows.length ? rows : [el("div", "empty", "No open terminals found.")]));
+  $("hint").textContent = s.selectHint;
+
+  $("enter").checked = s.pressEnter;
+  const rec = $("record");
+  rec.textContent = s.phase === "recording" ? "Stop recording" : "Start recording";
+  rec.classList.toggle("stop", s.phase === "recording");
+  rec.disabled = s.phase === "transcribing" || s.phase === "confirming" || (s.phase === "idle" && !s.target);
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => document.body.classList.remove("loading"));
+    menu.size(Math.ceil(document.querySelector(".panel").getBoundingClientRect().height) + 12);
+    (document.querySelector('.row[aria-checked="true"]') ?? document.querySelector(".row") ?? rec).focus({ preventScroll: true });
+  });
+});
+
+$("enter").addEventListener("change", (e) => menu.act({ type: "pressEnter", value: e.target.checked }));
+$("record").addEventListener("click", () => menu.act({ type: "record" }));
+$("settings").addEventListener("click", () => menu.act({ type: "settings" }));
+$("restart").addEventListener("click", () => menu.act({ type: "restart" }));
+$("quit").addEventListener("click", () => menu.act({ type: "quit" }));
+
+// Arrow keys move through the terminals; Escape closes.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") return menu.act({ type: "close" });
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const rows = [...document.querySelectorAll(".row")];
+  if (!rows.length) return;
+  const i = rows.indexOf(document.activeElement);
+  const next = rows[(i + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length];
+  next.focus();
+  e.preventDefault();
+});
+</script>
+</body>
+</html>

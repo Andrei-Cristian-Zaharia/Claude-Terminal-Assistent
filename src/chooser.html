@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Shown at the cursor while the mouse buttons are held, or after Ctrl+Tab. It never takes the focus (a game may be
+     in front), so main drives the highlight and the pick from the global mouse hook; this page
+     only draws and reports where its rows are. */
+  html, body { background: transparent; overflow: hidden; }
+  .panel {
+    margin: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .5); overflow: hidden;
+  }
+  header { padding: 11px 14px 9px; border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font: 600 14px/1.3 "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .rows { padding: 5px; }
+  .row {
+    display: grid; grid-template-columns: 14px 1fr auto; column-gap: 10px; align-items: center;
+    padding: 7px 9px; border-radius: 6px;
+  }
+  .row.hover { background: var(--hover); box-shadow: inset 2px 0 0 var(--ready); }
+  .radio { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--faint); }
+  .row.current .radio { border-color: var(--ready); background: radial-gradient(var(--ready) 0 3px, transparent 3.5px); }
+  .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .where { grid-column: 2; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { grid-row: 1 / span 2; grid-column: 3; }
+  .empty { padding: 10px 9px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="panel">
+  <header>
+    <h1>Pick a terminal</h1>
+    <p id="hint"></p>
+  </header>
+  <div class="rows" id="rows"></div>
+</div>
+<script>
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+chooser.onState(({ terminals, hint, highlight }) => {
+  document.getElementById("hint").textContent = hint ?? "";
+  const rows = terminals.map((t, i) => {
+    const r = el("div", `row${t.selected ? " current" : ""}${i === highlight ? " hover" : ""}`);
+    r.append(el("span", "radio"), el("span", "title", t.title));
+    if (t.claude) r.append(el("span", "chip", "Claude"));
+    r.append(el("span", "where", t.where));
+    return r;
+  });
+  document.getElementById("rows").replaceChildren(...(rows.length ? rows : [el("div", "empty", "No open terminals found.")]));
+  requestAnimationFrame(() => {
+    const panel = document.querySelector(".panel").getBoundingClientRect();
+    chooser.layout({
+      height: Math.ceil(panel.height) + 12,
+      rows: [...document.querySelectorAll(".row")].map((r) => { const b = r.getBoundingClientRect(); return { top: b.top, bottom: b.bottom, left: b.left, right: b.right }; }),
+    });
+  });
+});
+
+chooser.onHover((index) => {
+  document.querySelectorAll(".row").forEach((r, i) => r.classList.toggle("hover", i === index));
+});
+</script>
+</body>
+</html>

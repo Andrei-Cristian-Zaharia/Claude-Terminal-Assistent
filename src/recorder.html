@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'">
+<title>Recorder</title>
+</head>
+<body>
+<script>
+// Hidden window: records the default microphone at 16 kHz mono (what Whisper expects) between
+// rec:start and rec:stop, then hands back a 16-bit PCM WAV.
+const SAMPLE_RATE = 16000;
+let session = null;
+
+recorder.onStart(async () => {
+  if (session) return;
+  session = { chunks: [], stopRequested: false };
+  const mine = session;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+    const source = ctx.createMediaStreamSource(stream);
+    const node = ctx.createScriptProcessor(4096, 1, 1);
+    node.onaudioprocess = (e) => mine.chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    source.connect(node);
+    node.connect(ctx.destination);
+    Object.assign(mine, { stream, ctx, source, node });
+    recorder.started();
+    if (mine.stopRequested) finish(mine); // released before the mic finished opening
+  } catch (err) {
+    session = null;
+    recorder.error(`Microphone: ${err.message}`);
+  }
+});
+
+recorder.onStop(() => {
+  if (!session) return;
+  if (!session.ctx) { session.stopRequested = true; return; }
+  finish(session);
+});
+
+// Short audio cues, so the state is clear while a full-screen game hides the tray.
+// tones: list of [frequencyHz, durationMs].
+recorder.onBeep(async (tones) => {
+  const ctx = new AudioContext();
+  let t = ctx.currentTime;
+  for (const [freq, ms] of tones) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + ms / 1000);
+    t += ms / 1000 + 0.03;
+  }
+  setTimeout(() => ctx.close(), (t - ctx.currentTime) * 1000 + 200);
+});
+
+function finish(s) {
+  session = null;
+  s.node.disconnect();
+  s.source.disconnect();
+  s.stream.getTracks().forEach((t) => t.stop());
+  s.ctx.close();
+  recorder.audio(toWav(s.chunks));
+}
+
+function toWav(chunks) {
+  const length = chunks.reduce((n, c) => n + c.length, 0);
+  const buf = new ArrayBuffer(44 + length * 2);
+  const v = new DataView(buf);
+  const str = (off, s) => [...s].forEach((ch, i) => v.setUint8(off + i, ch.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, SAMPLE_RATE, true); v.setUint32(28, SAMPLE_RATE * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, length * 2, true);
+  let off = 44;
+  for (const c of chunks) for (const x of c) {
+    const s = Math.max(-1, Math.min(1, x));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return buf;
+}
+</script>
+</body>
+</html>

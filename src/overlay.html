@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; }
+  #pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    max-width: 300px; padding: 5px 11px 5px 9px; border-radius: 999px;
+    font: 600 12px/1.2 "Segoe UI", system-ui, sans-serif; color: #eeeff1;
+    background: rgba(31, 32, 35, 0.92); box-shadow: 0 2px 10px rgba(0,0,0,.4);
+    border: 1px solid rgba(255, 255, 255, .12); white-space: nowrap;
+  }
+  #text { overflow: hidden; text-overflow: ellipsis; }
+  .emoji { display: inline-block; line-height: 1; position: relative; top: -2px; }
+  #dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  /* Colors from theme.css: recording rose-red, transcribing gold, done orange. */
+  .recording #dot { background: #ff3355; box-shadow: 0 0 8px rgba(255, 51, 85, .8); animation: pulse 1s ease-in-out infinite; }
+  .recording #pill { border-color: rgba(255, 51, 85, .7); }
+  .transcribing #dot { background: none; border: 2px solid #ffc83d; border-top-color: transparent; width: 8px; height: 8px; animation: spin .7s linear infinite; }
+  .ok #dot { background: #ff7a1a; box-shadow: 0 0 8px rgba(255, 122, 26, .8); }
+  .ok #pill { border-color: rgba(255, 122, 26, .55); }
+  .error #dot { background: #ff3355; }
+  .error #pill { border-color: rgba(255, 51, 85, .7); }
+  @keyframes pulse { 50% { opacity: .25; transform: scale(.8); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="pill"><div id="dot"></div><span id="text"></span></div>
+<script>
+// state: { kind: "recording" | "transcribing" | "ok" | "error", text }
+// While recording, text is a suffix after the timer (the screenshot count); re-showing the
+// recording state keeps the running timer.
+// Color emoji glyphs sit low against Segoe UI text, so each emoji gets its own span that is
+// nudged up to line up with the text.
+const EMOJI = /(\p{Extended_Pictographic}️?)/u;
+function setText(el, s) {
+  el.replaceChildren(...s.split(EMOJI).filter(Boolean).map((part) => {
+    if (!EMOJI.test(part)) return document.createTextNode(part);
+    const span = document.createElement("span");
+    span.className = "emoji";
+    span.textContent = part;
+    return span;
+  }));
+}
+let timer = null;
+let t0 = 0;
+overlay.onShow(({ kind, text }) => {
+  const continuing = kind === "recording" && document.body.className === "recording";
+  document.body.className = kind;
+  clearInterval(timer);
+  const el = document.getElementById("text");
+  if (kind === "recording") {
+    if (!continuing) t0 = Date.now();
+    const tick = () => {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      setText(el, `REC ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} ${text}`.trim());
+    };
+    tick();
+    timer = setInterval(tick, 250);
+  } else {
+    el.textContent = text;
+  }
+});
+</script>
+</body>
+</html>

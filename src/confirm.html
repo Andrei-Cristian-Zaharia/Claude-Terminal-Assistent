@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Top-right of the screen, before a dictation is sent. Like the terminal chooser it never takes
+     the focus; main owns the countdown and handles clicks from the global mouse hook. This page
+     draws, and reports where its buttons are. */
+  html, body { background: transparent; overflow: hidden; }
+  .panel {
+    margin: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .5); overflow: hidden;
+  }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 14px 0; }
+  header .to { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .to b { color: var(--ink); font-weight: 600; }
+  .text {
+    margin: 8px 14px 0; font-size: 14px; line-height: 1.45; color: var(--ink); user-select: text;
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere;
+  }
+  .extra { margin: 4px 14px 0; color: var(--muted); font-size: 12px; }
+  .extra:empty { display: none; }
+  footer { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+  .reject-keys { flex: 1; display: flex; align-items: center; gap: 6px; color: var(--faint); font-size: 12px; }
+  button.hover { background: var(--hover); color: var(--ink); }
+  /* Accept: the light fill drains left to right as the seconds run out. */
+  #accept { position: relative; overflow: hidden; min-width: 104px; padding: 6px 14px; background: var(--raised); color: var(--ink); }
+  #accept .fill { position: absolute; top: 0; right: 0; bottom: 0; left: 0; overflow: hidden; background: var(--accent); }
+  #accept .label { font-weight: 600; font-variant-numeric: tabular-nums; }
+  #accept .fill .label {
+    position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--on-accent);
+  }
+  #accept.hover { border-color: var(--accent-hot); }
+  #accept.hover .fill { background: var(--accent-hot); }
+  .paused #accept .fill { background: color-mix(in srgb, var(--accent) 70%, var(--surface)); }
+</style>
+</head>
+<body>
+<div class="panel">
+  <header>
+    <span class="lamp" id="lamp" style="--lamp: var(--busy)"></span>
+    <div class="to" id="to"></div>
+  </header>
+  <div class="text" id="text"></div>
+  <div class="extra" id="extra"></div>
+  <footer>
+    <div class="reject-keys" id="rejectKeys"></div>
+    <button class="quiet" id="reject" tabindex="-1">Reject</button>
+    <button class="primary" id="accept" tabindex="-1"><span class="label" id="acceptLabel">Accept</span><span class="fill" id="fill"><span class="label" id="fillLabel">Accept</span></span></button>
+  </footer>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+let total = 3000, endsAt = 0, remaining = 0, raf = 0;
+
+function draw() {
+  const left = Math.max(0, endsAt ? endsAt - Date.now() : remaining);
+  $("fill").style.left = `${100 - (total ? (100 * left) / total : 0)}%`; // the light part shrinks to the right
+  $("acceptLabel").textContent = $("fillLabel").textContent = `Accept ${Math.ceil(left / 1000)}s`;
+  $("fillLabel").style.width = `${$("accept").clientWidth}px`; // the copy stays put while the fill shrinks
+  if (endsAt && left > 0) raf = requestAnimationFrame(draw);
+}
+
+toast.onShow((s) => {
+  total = s.seconds * 1000;
+  remaining = total;
+  endsAt = 0;
+  cancelAnimationFrame(raf);
+  document.body.classList.remove("paused");
+  const to = $("to");
+  to.replaceChildren(s.verb, " ", Object.assign(document.createElement("b"), { textContent: s.title }));
+  if (s.where) to.append(` (${s.where})`);
+  $("text").textContent = s.text || "(no words, images only)";
+  $("extra").textContent = s.images ? `With ${s.images} image${s.images > 1 ? "s" : ""}.` : "";
+  const keys = $("rejectKeys");
+  keys.replaceChildren();
+  if (s.rejectKeys?.length) {
+    const caps = document.createElement("span");
+    caps.className = "keys";
+    caps.append(...s.rejectKeys.map((k) => Object.assign(document.createElement("span"), { className: "keycap", textContent: k })));
+    keys.append(caps, "rejects");
+  }
+  for (const b of document.querySelectorAll("button")) b.classList.remove("hover");
+  draw();
+  requestAnimationFrame(() => {
+    const rect = (id) => { const r = $(id).getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; };
+    toast.layout({ height: Math.ceil(document.querySelector(".panel").getBoundingClientRect().height) + 16, accept: rect("accept"), reject: rect("reject") });
+  });
+});
+
+toast.onRun(({ remaining: ms }) => {
+  document.body.classList.remove("paused");
+  endsAt = Date.now() + ms;
+  cancelAnimationFrame(raf);
+  draw();
+});
+toast.onPause(({ remaining: ms }) => {
+  document.body.classList.add("paused");
+  cancelAnimationFrame(raf);
+  endsAt = 0;
+  remaining = ms;
+  draw();
+});
+toast.onHover((which) => {
+  $("accept").classList.toggle("hover", which === "accept");
+  $("reject").classList.toggle("hover", which === "reject");
+});
+</script>
+</body>
+</html>

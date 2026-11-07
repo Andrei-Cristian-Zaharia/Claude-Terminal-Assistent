@@ -1,0 +1,106 @@
+/* The shared look of every window of the app (tray menu, settings, terminal chooser,
+   accept/reject toast): plain neutral grays that are easy to read for long, with orange as the
+   one accent (primary buttons, switches, selection, the state lamp). Recording is rose-red and
+   transcribing gold so neither is mistaken for the orange.
+   Shortcuts are drawn as keys. overlay.html, picker.html and selection.html repeat these values
+   inline (they are transparent, click-through windows that don't load this file). */
+:root {
+  --surface: #1f2023;
+  --sunk: #19191c;      /* footers and bars below the content */
+  --raised: #2a2b2f;
+  --hover: #34353a;
+  --line: #3b3c42;
+  --ink: #eeeff1;
+  --muted: #a9acb3;     /* secondary text, kept well above 4.5:1 on the surface */
+  --faint: #7d8189;
+  --accent: #ff7a1a;    /* orange */
+  --accent-hot: #ff9442;
+  --accent-soft: #ffb27a;
+  --on-accent: #1f2023;
+  --ready: var(--accent);
+  --rec: #ff3355;
+  --busy: #ffc83d;
+  --idle: #8d9097;
+  --focus: var(--accent-soft);
+  --danger: #ff6b6b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* over component display rules such as .capture's flex */
+html, body { margin: 0; }
+body {
+  font: 400 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--surface);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+:focus { outline: none; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
+
+/* A shortcut key. Cascadia Mono, the terminal's own face, because these are literal keys. */
+.keycap {
+  display: inline-block;
+  min-width: 22px;
+  padding: 1px 6px 0;
+  font: 500 11px/18px "Cascadia Mono", Consolas, monospace;
+  text-align: center;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-bottom: 2px solid #4a4b52;
+  border-radius: 5px;
+}
+.keys { display: inline-flex; gap: 3px; align-items: center; }
+
+/* The state lamp: lit in the state's color, with a soft glow. */
+.lamp {
+  width: 10px; height: 10px; flex: none; border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, color-mix(in srgb, var(--lamp, var(--idle)) 55%, #fff) 0 18%, var(--lamp, var(--idle)) 60%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--lamp, var(--idle)) 20%, transparent),
+              0 0 14px color-mix(in srgb, var(--lamp, var(--idle)) 60%, transparent);
+}
+.lamp.pulse { animation: pulse 1.1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .lamp.pulse { animation: none; } }
+
+button {
+  font: inherit; color: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: var(--raised); padding: 6px 12px;
+}
+button:hover { background: var(--hover); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary {
+  background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600;
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hot); border-color: var(--accent-hot); }
+button.primary:disabled { box-shadow: none; }
+button.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+button.quiet:hover { background: var(--raised); color: var(--ink); }
+
+/* The "Claude" mark on terminals running Claude Code. */
+.chip { font-size: 11px; color: var(--accent-soft); border: 1px solid #5a4232; border-radius: 4px; padding: 0 6px; }
+
+/* On/off switch: a real checkbox, drawn as a track. */
+.switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.switch span {
+  position: absolute; inset: 0; border-radius: 10px; pointer-events: none;
+  background: var(--raised); border: 1px solid var(--line); transition: background .15s;
+}
+.switch span::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--muted); transition: transform .15s, background .15s;
+}
+.switch input:checked + span { background: var(--accent); border-color: var(--accent); }
+.switch input:checked + span::after { transform: translateX(16px); background: var(--on-accent); }
+/* No animation while a window fills in its values, only when the person flips a switch. */
+body.loading .switch span, body.loading .switch span::after { transition: none; }
+.switch input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Native form controls in the settings window. */
+input[type="range"] { accent-color: var(--accent); }
