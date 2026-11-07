@@ -9,11 +9,11 @@ const { uIOhook, UiohookKey } = require("uiohook-napi");
 const { Whisper, isHallucination, peakLevel } = require("./whisper.cjs");
 const screenrec = require("./screenrec.cjs");
 const { grab } = require("./screen-grab.cjs");
-const { terminalLabel, keycaps, buttonName } = require("./labels.cjs");
+const { terminalLabel, statusChip, keycaps, buttonName } = require("./labels.cjs");
 const { RESTART_KEYS, needsRestart, validate, formatConfig } = require("./settings-model.cjs");
 const { trayIcon } = require("./tray-icon.cjs");
 const { createLog, hookConsole } = require("./log.cjs");
-const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow, foregroundWindow, focusTerminal } = require("./terminals.cjs");
+const { listTerminals: listConsoles, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow, foregroundWindow, focusTerminal } = require("./terminals.cjs");
 const tasks = require("./tasks.cjs");
 const corners = require("./corners.cjs");
 const { startMouseGuard } = require("./mouse-guard.cjs");
@@ -523,6 +523,22 @@ function saveState() {
 const ICONS = Object.fromEntries(["idle", "notarget", "recording", "transcribing"].map((k) => [k, trayIcon(nativeImage, k)]));
 ICONS.confirming = ICONS.transcribing;
 
+// What Claude is doing in each terminal, for the lists: the console title says working or not;
+// the hooks' last event per terminal pid ({ kind: "ask" | "done", at }, set in onTaskDone) tells
+// "needs you" and "done" from idle (tasks.claudeStatus). Every listing keeps it current.
+const claudeEvents = new Map();
+async function listTerminals() {
+  const list = await listConsoles();
+  tasks.updateEvents(claudeEvents, list);
+  return list;
+}
+// One row of the tray menu or the terminal chooser.
+const rowLabel = (t) => ({
+  ...terminalLabel(t),
+  status: statusChip(tasks.claudeStatus(t, claudeEvents.get(t.pid))),
+  selected: target?.pid === t.pid,
+});
+
 const describe = (t) => `${t.tabName ? `[${t.tabName}] ` : ""}${t.title || t.shell} (${t.shell}${t.host ? ` in ${t.host}` : ""}, pid ${t.pid})`;
 
 function refreshTray() {
@@ -570,7 +586,7 @@ function sendMenuState() {
   menuWin.webContents.send("menu:state", {
     phase,
     target: target ? terminalLabel(target) : null,
-    terminals: terminals.map((t) => ({ ...terminalLabel(t), selected: target?.pid === t.pid })),
+    terminals: terminals.map(rowLabel),
     hotkey: keycaps(cfg.hotkey),
     selectHint: selectHint(),
     pressEnter: !!cfg.pressEnter,
@@ -1049,10 +1065,16 @@ function startTaskPipe() {
 
 async function onTaskDone(m) {
   const n = notifyCfg();
-  if (n.enabled === false) return;
   let list = terminals;
   try { list = await listTerminals(); terminals = list; } catch (err) { console.error(err); }
   const t = tasks.findTerminal(list, m.chain);
+  if (t) {
+    claudeEvents.set(t.pid, { kind: m.kind, at: Date.now() });
+    // An open list shows the new state at once.
+    if (menuWin?.isVisible()) sendMenuState();
+    if (chooserWin?.isVisible()) setChooserList(chooserTerminals, chooserHover);
+  }
+  if (n.enabled === false) return; // no cards, but the lists still show the state
   try {
     if (tasks.isShowing({ fg: await foregroundWindow(), terminal: t, terminals: list, chain: m.chain })) {
       return console.log(`[done] ${t ? describe(t) : "Claude"} ${m.kind === "ask" ? "asks" : "finished"}, already in front: no card`);
@@ -1436,7 +1458,7 @@ function setChooserList(list, highlight) {
   chooserHover = highlight;
   hideOverlay(); // the pill would sit on top of the list
   chooserWin.webContents.send("chooser:state", {
-    terminals: list.map((t) => ({ ...terminalLabel(t), selected: target?.pid === t.pid })),
+    terminals: list.map(rowLabel),
     hint: chooserHint(),
     highlight,
   });

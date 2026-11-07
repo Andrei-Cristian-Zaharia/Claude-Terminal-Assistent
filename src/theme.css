@@ -23,6 +23,7 @@
   --idle: #8d9097;
   --focus: var(--accent-soft);
   --danger: #ff6b6b;
+  --done: #4ade80;      /* "Done" next to a Claude terminal; the status line's green */
   color-scheme: dark;
 }
 
@@ -83,7 +84,15 @@ button.quiet { background: transparent; border-color: transparent; color: var(--
 button.quiet:hover { background: var(--raised); color: var(--ink); }
 
 /* The "Claude" mark on terminals running Claude Code. */
-.chip { font-size: 11px; color: var(--accent-soft); border: 1px solid #5a4232; border-radius: 4px; padding: 0 6px; }
+.chip { font-size: 11px; color: var(--accent-soft); border: 1px solid #5a4232; border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+/* What Claude is doing there (labels.statusChip): working, waiting for a permission (gold like the
+   "Claude needs you" card), done, idle. Static: no animation in these transparent windows. */
+.chip.working::before { content: "◐ "; }
+.chip.ask { color: var(--busy); border-color: color-mix(in srgb, var(--busy) 45%, transparent); font-weight: 600; }
+.chip.ask::before { content: "● "; }
+.chip.done { color: var(--done); border-color: color-mix(in srgb, var(--done) 35%, transparent); }
+.chip.done::before { content: "✓ "; }
+.chip.idle { color: var(--faint); border-color: var(--line); }
 
 /* On/off switch: a real checkbox, drawn as a track. */
 .switch { position: relative; display: inline-block; width: 36px; height: 20px; flex: none; }

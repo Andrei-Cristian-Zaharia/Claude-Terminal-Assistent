@@ -70,6 +70,36 @@ function isShowing({ fg, terminal, terminals = [], chain = [] }) {
   return [terminal.tabName, terminal.title].map(normTitle).some((b) => a && b && (a === b || a.includes(b)));
 }
 
+// What Claude is doing in a terminal, for the terminal lists. Claude Code puts a glyph in front of
+// its console title: a turning half circle (◐◓◑◒) while it works, ✳ otherwise, and also ✳ while
+// a permission question waits (checked by hand), so the title alone can't tell waiting from idle.
+// The hooks' last event for that terminal (`event`: { kind: "ask" | "done", at }) tells those
+// apart. -> null (no Claude here) or { state: "working" | "ask" | "done" | "idle", at? }
+const WORKING_GLYPH = /^[◐-◓⠀-⣿]/u; // half circles; braille spinners in older versions
+const IDLE_GLYPH = /^✳/u;
+function claudeStatus(t, event) {
+  const title = (t?.title ?? "").trim();
+  const claude = (t?.processes ?? []).some((p) => p.toLowerCase() === "claude.exe");
+  if (!claude && !WORKING_GLYPH.test(title) && !IDLE_GLYPH.test(title)) return null;
+  if (WORKING_GLYPH.test(title)) return { state: "working" };
+  if (event?.kind === "ask") return { state: "ask", at: event.at };
+  if (event?.kind === "done") return { state: "done", at: event.at };
+  return { state: "idle" };
+}
+
+// The hooks' last event per terminal pid, kept up to date with what a fresh listing shows: Claude
+// seen working again after a permission question means it was answered, so the question is
+// dropped (otherwise a refused one would read "needs you" for ever); terminals that closed go.
+function updateEvents(events, terminals) {
+  const live = new Map(terminals.map((t) => [t.pid, t]));
+  for (const [pid, ev] of events) {
+    const t = live.get(pid);
+    if (!t) events.delete(pid);
+    else if (ev.kind === "ask" && WORKING_GLYPH.test((t.title ?? "").trim())) events.delete(pid);
+  }
+  return events;
+}
+
 // Checks what came over the pipe; anything malformed is dropped. -> message or null.
 function parseMessage(raw) {
   let m;
@@ -82,4 +112,4 @@ function parseMessage(raw) {
   return { type: "done", kind, chain, cwd: str(m.cwd, 1024), sessionId: str(m.sessionId, 128), text: str(m.text, MAX_TEXT) };
 }
 
-module.exports = { PIPE_NAME, MAX_TEXT, lastAssistantText, summarize, findTerminal, isShowing, parseMessage, normTitle };
+module.exports = { PIPE_NAME, MAX_TEXT, lastAssistantText, summarize, findTerminal, isShowing, parseMessage, normTitle, claudeStatus, updateEvents };

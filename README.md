@@ -4,7 +4,7 @@
 
 Playing a game, reading a page, or working in another app? Choose a terminal, press a shortcut, and say what you want to send. Claude Terminal Assistant turns your speech into text and types it into that terminal without switching away from your current window.
 
-For example, leave Claude Code open in a terminal, switch to your browser, and say: *“Explain the error and suggest a fix.”* You can include a screenshot while you speak, too. When Claude is done, or needs your permission, a small card in the corner of the screen tells you; click it to jump straight back to that terminal.
+For example, leave Claude Code open in a terminal, switch to your browser, and say: *“Explain the error and suggest a fix.”* You can include a screenshot while you speak, too. When Claude is done, or needs your permission, a small card in the corner of the screen tells you; click it to jump straight back to that terminal. The terminal list shows which sessions are still working, which wait for you, and which are done.
 
 The helper lives beside the Windows clock as a small microphone icon. Speech recognition runs on your PC with whisper.cpp; no cloud transcription account or API key is needed. The terminal app you send the text to, such as Claude Code, has its own requirements.
 
@@ -124,7 +124,18 @@ When Claude is **waiting for your permission** (to run a command, edit a file…
 
 No card appears when that terminal is already in front of you. The cards show above borderless games; in exclusive full-screen you still hear the chime. If Claude runs inside an editor rather than a terminal, a click brings that editor's window forward.
 
-The cards need the Claude Code hooks from [step 5 of the install](#5-connect-claude-code-recommended). In **Settings → When Claude finishes** you can turn them or their sound off, change how long they stay, and pick the corner of the screen.
+The terminal lists (the tray menu, Ctrl+Tab, and holding Back + Forward) show the same at a glance, next to each terminal running Claude:
+
+| Chip | Meaning |
+|---|---|
+| **◐ Working** | Claude is working on something. |
+| **● Needs you** | Claude is waiting for your permission. |
+| **✓ Done · 3m** | Claude finished, 3 minutes ago. |
+| **Idle** | Claude is waiting for your next message. |
+
+**Working** and **Idle** come from the terminal title that Claude Code sets, so they show even without the hooks; **Needs you** and **Done** need them.
+
+The cards and chips need the Claude Code hooks from [step 5 of the install](#5-connect-claude-code-recommended). In **Settings → When Claude finishes** you can turn them or their sound off, change how long they stay, and pick the corner of the screen.
 
 ## Naming your terminals
 
