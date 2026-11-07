@@ -157,6 +157,8 @@ Start a voice recording first, then use either gesture:
 | One area of the screen | Hold **Back**, drag across the area, then release. No left-click is needed. |
 | A sequence of screen changes | Tap **Back** to begin capturing, then tap it again to stop. Ending voice recording also stops the capture. |
 
+While you are recording, Back and Forward only do these things: the app or web page under the cursor doesn't receive them, so a browser won't go back a page. The same applies to the Back + Forward press that starts or stops a recording, and to Back when you hold it to click a terminal. Outside a recording, a press of Back or Forward on its own works as usual.
+
 For example: say *“This is the error I mean,”* capture the error, then continue explaining.
 
 Screen recording saves a **sequence of still images**, not a video file. It checks the monitor under the cursor and keeps frames when the screen or pointer changes. The capture interval and frame limit are adjustable in **Settings → Screen recording**.

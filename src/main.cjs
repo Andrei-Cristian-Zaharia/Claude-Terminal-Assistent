@@ -13,6 +13,7 @@ const { RESTART_KEYS, needsRestart, validate, formatConfig } = require("./settin
 const { trayIcon } = require("./tray-icon.cjs");
 const { createLog, hookConsole } = require("./log.cjs");
 const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow } = require("./terminals.cjs");
+const { startMouseGuard } = require("./mouse-guard.cjs");
 
 const ROOT = path.join(__dirname, "..");
 const CONFIG_FILE = path.join(ROOT, "config.json");
@@ -715,6 +716,7 @@ function toggleRecording({ allowNoTarget = false } = {}) {
   if (phase !== "idle") return beep("error");
   if (!target && !allowNoTarget) return fail("Pick a target terminal first (right-click the tray icon).");
   phase = "recording";
+  mouseGuard?.setActive(true);
   shots = [];
   frames = [];
   dictation = null;
@@ -733,6 +735,7 @@ function stopRecording() {
   cancelDrag(); // a drag still in progress when recording stops is dropped
   stopScreenRec(); // its frames stay in `frames` for rec:audio
   phase = "transcribing";
+  mouseGuard?.setActive(false);
   refreshTray();
   beep("stop");
   showOverlay("transcribing", "Transcribing…");
@@ -741,6 +744,7 @@ function stopRecording() {
 
 function backToIdle() {
   phase = "idle";
+  mouseGuard?.setActive(false);
   dictation = null;
   refreshTray();
 }
@@ -783,6 +787,7 @@ function cancelRecording() {
   dictation = null;
   discardAudio++;
   phase = "idle";
+  mouseGuard?.setActive(false);
   refreshTray();
   recorderWin.webContents.send("rec:stop");
   hideOverlay();
@@ -1008,9 +1013,40 @@ app.whenReady().then(async () => {
   setupConfirmHook();
   setupChooserHook();
   registerTerminalsShortcut();
+  await setupMouseGuard(); // before uiohook: see mouse-guard.cjs on hook order
   try { uIOhook.start(); } catch (err) { notify(APP_NAME, `Global mouse/key hook failed: ${err.message}`); }
   console.log(`[app] ready. Hotkey ${cfg.hotkey}. Target: ${target ? describe(target) : "none"}`);
 });
+
+// ---------- mouse guard ----------
+// While recording, Back/Forward (the chord and the select button) only do the app's things: the
+// guard process drops them before the window under the cursor sees them, so a screenshot drag in
+// a browser doesn't also go back a page (rules in button-guard.cjs). It has to be installed before
+// uiohook; if it ever exits, it is started again and uiohook is restarted after it, to keep that order.
+let mouseGuard = null;
+let guardRestarts = 0;
+async function setupMouseGuard() {
+  const chord = Array.isArray(cfg.mouseHotkey ?? [4, 5]) ? (cfg.mouseHotkey ?? [4, 5]) : [];
+  const select = cfg.select ?? { mouseButton: 4 };
+  const config = { chord, buttons: select.mouseButton ? [select.mouseButton] : [] };
+  try {
+    mouseGuard = await startMouseGuard(config, {
+      onExit: (code) => {
+        console.warn(`[guard] exited (${code})`);
+        mouseGuard = null;
+        if (++guardRestarts > 3) return;
+        setupMouseGuard().then(() => {
+          if (!mouseGuard) return;
+          try { uIOhook.stop(); uIOhook.start(); } catch (err) { console.error(err); }
+          mouseGuard.setActive(phase === "recording");
+        });
+      },
+    });
+    console.log(`[guard] on for buttons ${[...new Set([...config.chord, ...config.buttons])].join(", ")}`);
+  } catch (err) {
+    console.error(`[guard] not started: ${err.message}`); // the buttons then also reach other apps
+  }
+}
 
 // ---------- recording hotkey ----------
 // A normal accelerator ("Control+Alt+Space") goes through globalShortcut (RegisterHotKey).
@@ -1321,5 +1357,6 @@ app.on("window-all-closed", () => {}); // tray app: keep running
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   try { uIOhook.stop(); } catch {}
+  mouseGuard?.stop();
   whisper.stop();
 });
