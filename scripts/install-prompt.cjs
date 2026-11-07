@@ -13,7 +13,8 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 
-const MARKER = "# terminal-claude-helper";
+const MARKER = "# claude-terminal-assistant";
+const OLD_MARKER = "# terminal-claude-helper"; // lines added before the rename are replaced or removed too
 const root = path.resolve(__dirname, "..");
 const fwd = (p) => p.replace(/\\/g, "/");
 const uninstall = process.argv.includes("--uninstall");
@@ -29,7 +30,7 @@ function profilePath(exe) {
 // Appends `line` (tagged with MARKER) to a profile-like file, or removes tagged lines.
 function editLines(file, line) {
   const old = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-  const kept = old.split(/\r?\n/).filter((l) => !l.includes(MARKER));
+  const kept = old.split(/\r?\n/).filter((l) => !l.includes(MARKER) && !l.includes(OLD_MARKER));
   while (kept.length && kept[kept.length - 1] === "") kept.pop();
   if (!uninstall) kept.push(`${line} ${MARKER}`);
   const eol = old.includes("\r\n") ? "\r\n" : "\n";

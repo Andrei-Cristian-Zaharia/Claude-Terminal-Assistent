@@ -17,7 +17,46 @@ const CONFIG_FILE = path.join(ROOT, "config.json");
 const APP_ICON = path.join(ROOT, "assets", "icon.png"); // npm run icon
 const MIN_WAV_BYTES = 44 + 16000 * 2 * 0.3; // ignore taps shorter than 0.3 s
 
+const APP_NAME = "Claude Terminal Assistant";
+
+// Data (state.json, screenshots) lives in %APPDATA%\claude-terminal-assistant: no spaces, because
+// screenshot paths are typed into terminals. Before the rename it was terminal-claude-helper; it is
+// moved over once, or, if the move fails (files still open), what matters is copied. A
+// --user-data-dir switch (test runs) is left alone. Set before the single-instance lock, which
+// lives in this folder.
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  const dataDir = path.join(app.getPath("appData"), "claude-terminal-assistant");
+  const oldDir = path.join(app.getPath("appData"), "terminal-claude-helper");
+  if (!fs.existsSync(dataDir) && fs.existsSync(oldDir)) {
+    try {
+      fs.renameSync(oldDir, dataDir);
+    } catch {
+      fs.mkdirSync(dataDir, { recursive: true });
+      for (const f of ["state.json", "screenshots"]) {
+        try { fs.cpSync(path.join(oldDir, f), path.join(dataDir, f), { recursive: true }); } catch {}
+      }
+    }
+  }
+  app.setPath("userData", dataDir);
+}
+
 if (!app.requestSingleInstanceLock()) app.exit(0);
+// Started again (e.g. `npm start`) while already running, often from the login item: the new copy
+// quits at once, so show this one's menu to make clear it is there.
+app.on("second-instance", () => { if (tray && menuWin) showMenu(); });
+
+// Start with Windows (config "startAtLogin", default on): a per-user Run entry that launches this
+// Electron with the project folder, straight into the tray. Written at every start so it follows
+// the project if it moves; turning the setting off removes it.
+const LOGIN_ITEM = { path: process.execPath, args: [app.getAppPath()], name: APP_NAME };
+function applyStartAtLogin() {
+  try {
+    app.setLoginItemSettings({ ...LOGIN_ITEM, name: "Terminal Claude Helper", openAtLogin: false }); // the name before the rename
+    app.setLoginItemSettings({ ...LOGIN_ITEM, openAtLogin: cfg.startAtLogin !== false });
+  } catch (err) {
+    console.error("[login item]", err);
+  }
+}
 
 const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
 const whisper = new Whisper(cfg.whisper);
@@ -57,7 +96,7 @@ function notify(title, body) {
 function fail(message) {
   beep("error");
   showOverlay("error", message.split("\n")[0], 3000);
-  notify("Terminal Claude Helper", message);
+  notify(APP_NAME, message);
 }
 
 // ---------- cursor overlay ----------
@@ -117,7 +156,7 @@ function setupClickSelect() {
   const sel = cfg.select ?? { mouseButton: 4 };
   const keycode = sel.key ? UiohookKey[sel.key] : undefined;
   if (sel.key && keycode === undefined) {
-    notify("Terminal Claude Helper", `Unknown select key "${sel.key}" in config.json.`);
+    notify(APP_NAME, `Unknown select key "${sel.key}" in config.json.`);
   }
   // While recording, the same button instead drags out a screenshot area: press, move, release.
   let held = false;
@@ -451,7 +490,7 @@ function refreshTray() {
   const icon = phase !== "idle" ? ICONS[phase] : target ? ICONS.idle : ICONS.notarget;
   tray.setImage(icon);
   const lines = [
-    "Terminal Claude Helper",
+    APP_NAME,
     target ? `Typing into ${terminalLabel(target).title}` : "No terminal picked",
     phase !== "idle" ? phase[0].toUpperCase() + phase.slice(1) : `Shortcut: ${keycaps(cfg.hotkey).join("+")}`,
   ];
@@ -561,7 +600,7 @@ let settingsWin = null;
 function openSettings() {
   if (settingsWin && !settingsWin.isDestroyed()) { settingsWin.show(); settingsWin.focus(); return; }
   settingsWin = new BrowserWindow({
-    width: 620, height: 760, minWidth: 520, minHeight: 480, show: false, title: "Terminal Claude Helper settings",
+    width: 620, height: 760, minWidth: 520, minHeight: 480, show: false, title: `${APP_NAME} settings`,
     backgroundColor: "#1f2023", autoHideMenuBar: true, icon: APP_ICON,
     webPreferences: { preload: path.join(__dirname, "settings-preload.cjs") },
   });
@@ -600,6 +639,7 @@ ipcMain.handle("settings:save", (_e, next) => {
   Object.assign(cfg, structuredClone(next));
   saveState(); // pressEnter also lives in state.json
   if (cfg.cursorIndicator === false) hideOverlay();
+  applyStartAtLogin();
   refreshTray();
   console.log(`[settings] saved${restart ? ", restarting" : ""}`);
   if (restart) { app.relaunch(); app.quit(); } else settingsWin?.close();
@@ -884,7 +924,7 @@ function setupConfirmHook() {
 
 // ---------- startup ----------
 app.whenReady().then(async () => {
-  app.setAppUserModelId("Terminal Claude Helper");
+  app.setAppUserModelId(APP_NAME);
   nativeTheme.themeSource = "dark"; // dark title bar on the settings window
   loadState();
 
@@ -903,6 +943,7 @@ app.whenReady().then(async () => {
   await createChooser();
   await createConfirm();
   pruneScreenshots();
+  applyStartAtLogin();
 
   tray = new Tray(ICONS.notarget);
   tray.on("click", showMenu);
@@ -919,7 +960,7 @@ app.whenReady().then(async () => {
   setupConfirmHook();
   setupChooserHook();
   registerTerminalsShortcut();
-  try { uIOhook.start(); } catch (err) { notify("Terminal Claude Helper", `Global mouse/key hook failed: ${err.message}`); }
+  try { uIOhook.start(); } catch (err) { notify(APP_NAME, `Global mouse/key hook failed: ${err.message}`); }
   console.log(`[app] ready. Hotkey ${cfg.hotkey}. Target: ${target ? describe(target) : "none"}`);
 });
 
@@ -950,7 +991,7 @@ const hotkeyToggle = (opts) => { if (!hotkeysPaused) toggleRecording(opts); };
 function registerAccelerator() {
   let ok = false;
   try { ok = globalShortcut.register(cfg.hotkey, () => hotkeyToggle()); } catch {}
-  if (!ok) notify("Terminal Claude Helper", `Could not register the shortcut "${cfg.hotkey}" (invalid, or another app uses it). Change it in Settings.`);
+  if (!ok) notify(APP_NAME, `Could not register the shortcut "${cfg.hotkey}" (invalid, or another app uses it). Change it in Settings.`);
 }
 
 function setupHotkey() {
@@ -1222,7 +1263,7 @@ function registerTerminalsShortcut() {
   if (!accel) return;
   let ok = false;
   try { ok = globalShortcut.register(accel, () => chooserKey(1)); } catch {}
-  if (!ok) return notify("Terminal Claude Helper", `Could not register the terminals shortcut "${accel}" (invalid, or another app uses it). Change it in Settings.`);
+  if (!ok) return notify(APP_NAME, `Could not register the terminals shortcut "${accel}" (invalid, or another app uses it). Change it in Settings.`);
   if (!/(^|\+)shift(\+|$)/i.test(accel)) {
     try { globalShortcut.register(`Shift+${accel}`, () => chooserKey(-1)); } catch {}
   }

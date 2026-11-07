@@ -1,4 +1,5 @@
 {
+  "startAtLogin": true,
   "hotkey": "Control+Alt",
   "terminalsHotkey": "Control+Tab",
   "pressEnter": true,

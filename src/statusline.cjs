@@ -40,8 +40,12 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const EFFORT_COLOR = { low: C.dim, medium: C.yellow, high: C.orange, xhigh: C.red, max: C.red };
 
 function targetPid() {
-  const file = path.join(process.env.APPDATA ?? "", "terminal-claude-helper", "state.json");
-  try { return JSON.parse(fs.readFileSync(file, "utf8")).target?.pid ?? null; } catch { return null; }
+  // The app's data folder, or the one it had before the rename (until the app has moved it).
+  for (const dir of ["claude-terminal-assistant", "terminal-claude-helper"]) {
+    const file = path.join(process.env.APPDATA ?? "", dir, "state.json");
+    try { return JSON.parse(fs.readFileSync(file, "utf8")).target?.pid ?? null; } catch {}
+  }
+  return null;
 }
 
 function isAncestor(pid, processes) {

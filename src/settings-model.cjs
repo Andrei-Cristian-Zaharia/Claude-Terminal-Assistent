@@ -15,6 +15,7 @@ const isNum = (v, min, max) => typeof v === "number" && Number.isFinite(v) && v 
 function validate(c, keyNames = []) {
   const errors = [];
   const bad = (field, message) => errors.push({ field, message });
+  if (c.startAtLogin !== undefined && typeof c.startAtLogin !== "boolean") bad("startAtLogin", "Turn starting with Windows on or off.");
   if (typeof c.hotkey !== "string" || !c.hotkey.trim()) bad("hotkey", "Set a recording shortcut.");
   const th = c.terminalsHotkey ?? "";
   const MODS = ["control", "ctrl", "alt", "shift", "super", "meta", "commandorcontrol", "cmdorctrl"];

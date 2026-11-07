@@ -1,97 +1,236 @@
-# Terminal Claude Helper
+# Claude Terminal Assistant
 
-Talk to your terminal from anywhere. Pick a terminal once (for example the one running Claude Code), then press a shortcut while you're in a game, a browser or an editor, and say what you want. Your words are transcribed on your own PC and typed into that terminal. The app you're using keeps the focus.
+**Speak to your terminal while you keep doing something else.**
 
-It lives in the Windows tray as a small microphone. Speech recognition runs locally with [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Nothing is sent to the cloud.
+Playing a game, reading a page, or working in another app? Choose a terminal, press a shortcut, and say what you want to send. Claude Terminal Assistant turns your speech into text and types it into that terminal without switching away from your current window.
 
-## How it works
+For example, leave Claude Code open in a terminal, switch to your browser, and say: *“Explain the error and suggest a fix.”* You can include a screenshot while you speak, too.
 
-1. **Pick a terminal.** Click the tray icon and choose one from the list. Windows Terminal tabs, VS Code and IntelliJ terminals, and classic console windows all show up. Terminals running Claude Code are marked.
-2. **Press the shortcut and speak.** A small pill next to the mouse shows that you're recording.
-3. **Press the shortcut again.** The recording stops and is transcribed.
-4. **Accept or reject.** A box at the top right of the screen shows the text. If you do nothing for 3 seconds, it's sent. The text is typed into the terminal and Enter is pressed, so Claude Code gets your prompt right away.
+The helper lives beside the Windows clock as a small microphone icon. Speech recognition runs on your PC with whisper.cpp; no cloud transcription account or API key is needed. The terminal app you send the text to, such as Claude Code, has its own requirements.
 
-You can also show your screen. While recording, drag with the Back mouse button to attach a screenshot, or tap it to record the screen. Claude gets the images right where you were talking about them.
-
-## Shortcuts
-
-All of these can be changed in **Settings** (click the tray icon, then Settings).
-
-| Shortcut | What it does |
-|---|---|
-| Tap **Ctrl+Alt** | Start or stop recording. Press both, then let go. |
-| **Back + Forward** mouse buttons | Start or stop recording. |
-| Hold **Back + Forward**, then click a window | Type this recording into that window instead, for example an editor or a chat. |
-| Keep holding **Back + Forward** (1.5 seconds by default) | Show the list of terminals at the mouse. Click one while still holding the buttons to pick it. |
-| **Ctrl+Tab** | Show the list of terminals, like Alt+Tab. Keep Ctrl down, press Tab to move down or Ctrl+Shift+Tab to move up, and let go of Ctrl to pick. Esc cancels. |
-| Hold **Back** and click a terminal window | Pick that terminal. |
-
-While recording:
-
-| Shortcut | What it does |
-|---|---|
-| Hold **Back** and drag | Take a screenshot of that area. |
-| Tap **Back** | Start or stop recording the screen. |
-
-While the accept/reject box is showing:
-
-| Shortcut | What it does |
-|---|---|
-| Click **Accept** or **Reject** | Send the text now, or throw it away. |
-| Move the mouse over the box | Pause the countdown so you can read. |
-| **Ctrl+Alt** or **Back + Forward** | Reject. |
-
-> While the helper runs, **Ctrl+Tab belongs to it alone**: browsers and editors stop getting it, so they won't switch tabs with it. Change it or turn it off in Settings if you need it there.
+[Install](#install) · [First dictation](#your-first-dictation) · [Settings](#settings) · [Shortcuts](#shortcuts) · [Troubleshooting](#troubleshooting)
 
 ## Install
 
-You need Windows 10 or 11 and [Node.js](https://nodejs.org) 20 or newer. An NVIDIA graphics card makes transcription much faster, but it isn't required.
+### 1. Get the app
 
-1. **Get the code and its packages.**
+You will need:
 
-   ```
-   git clone <this repository>
-   cd "Terminal Claude Helper"
-   npm install
-   ```
+- **Windows 10 or 11** and a microphone. The helper uses your Windows default microphone.
+- **[Node.js](https://nodejs.org/en/download)** with npm. Choose an LTS release.
+- **whisper.cpp and a speech model**, set up in the next step. An NVIDIA GPU can speed up transcription; a CPU build is also available.
 
-   If `npm start` later says Electron is missing, run `node node_modules/electron/install.js` once.
+On this GitHub page, choose **Code → Download ZIP**, then extract the folder somewhere you want to keep it. Open a terminal in that folder and run:
 
-2. **Get whisper.cpp.** Download a Windows build of `whisper-server.exe` from the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases). Take the CUDA (cuBLAS) build if you have an NVIDIA card. Then download a model from [Hugging Face](https://huggingface.co/ggerganov/whisper.cpp/tree/main). `ggml-large-v3-turbo.bin` is fast and accurate.
+```powershell
+npm install
+```
 
-3. **Tell the helper where they are.** Open `config.json` and set the two paths, plus the language you speak:
+If you use Git, you can get the project this way instead:
 
-   ```json
-   "whisper": {
-     "server": "C:\\whisper\\whisper-server.exe",
-     "model": "C:\\whisper\\models\\ggml-large-v3-turbo.bin",
-     "language": "english",
-     ...
-   }
-   ```
+```powershell
+git clone https://github.com/Andrei-Cristian-Zaharia/ClaudeTerminalAssistent.git
+cd ClaudeTerminalAssistent
+npm install
+```
 
-   Use double backslashes in the paths. Other models in the same folder can be chosen later in Settings.
+### 2. Set up speech recognition
 
-4. **Start it.**
+Whisper needs two things: a program that processes your audio, and a model file that recognizes speech.
 
-   ```
-   npm start
-   ```
+1. Download a **Windows x64 build containing `whisper-server.exe`** from the [whisper.cpp releases](https://github.com/ggml-org/whisper.cpp/releases). Choose a CUDA build for a compatible NVIDIA GPU, or a CPU build otherwise.
+2. Extract the **whole archive**. Keep the included DLL files with the executable.
+3. Download a model from the [whisper.cpp model files](https://huggingface.co/ggerganov/whisper.cpp/tree/main). This project is configured for `ggml-large-v3-turbo.bin`. Save it somewhere you will keep it, for example `C:\whisper\models`.
 
-   A microphone appears in the tray. Gray means no terminal is picked yet. Orange means ready, red means recording, and yellow means transcribing.
+Already have whisper.cpp and a model installed? You can reuse them.
 
-5. **Optional: a "Selected" line in your terminals.** This shows "● Selected" above the prompt of the terminal you're talking to, and in Claude Code's status line:
+### 3. Connect the helper to Whisper
 
-   ```
-   npm run install-prompt
-   ```
+Open [`config.json`](config.json) in a text editor. The paths included in the repository point to the author's computer, so **you must replace them with your own paths**.
 
-   `npm run install-prompt -- --uninstall` removes it again.
+Replace the value of the existing `whisper` section with the object below, adjusting `server` and `model` to match your files. Keep the other sections of `config.json`.
 
-## Good to know
+```json
+{
+  "server": "C:\\whisper\\whisper-server.exe",
+  "model": "C:\\whisper\\models\\ggml-large-v3-turbo.bin",
+  "language": "english",
+  "port": 8178,
+  "threads": 4,
+  "idleUnloadMinutes": 15
+}
+```
 
-- **Games:** the pill and the boxes show up over games in borderless or windowed mode, but not in exclusive full screen. Some games with anti-cheat may block the keyboard shortcut. The mouse buttons are a good fallback.
-- **Wrong language:** short commands are sometimes heard as another language. Set your language in Settings instead of "Detect automatically".
-- **Terminals run as administrator** can't be typed into, because the helper isn't running as administrator.
-- **Graphics memory:** the speech model unloads after 15 minutes without dictation, so games get the GPU back. You can change this in Settings.
-- **Restart:** after changing code or `config.json` by hand, click the tray icon, then Restart.
+- `server` must point to **`whisper-server.exe`**, including any subfolders created when you extracted it.
+- `model` must point to the downloaded **`.bin` file**.
+- Use **double backslashes** in Windows paths, as shown above.
+- Set `language` to `english`, `romanian`, or `auto` for automatic detection. Choosing a specific language helps with short phrases. The repository's starting configuration uses Romanian.
+
+### 4. Start the helper
+
+From the project folder, run:
+
+```powershell
+npm start
+```
+
+Look for the microphone icon beside the Windows clock. It may be inside the **hidden icons** menu, opened with the small arrow. Click the microphone to open the app menu.
+
+**Start with Windows is on by default.** After the first launch, the helper is configured to start when you sign in. You can turn this off in **Settings → General**. Keep the project folder in place while you use this option.
+
+## Your first dictation
+
+1. **Open the terminal you want to talk to.** If you want to send prompts to Claude Code, start it there first. The helper types into whatever is currently running in the selected terminal.
+2. **Choose that terminal.** Click the microphone in the tray and select it from the list. The icon turns orange when a target is selected.
+3. **Switch to another app.** The terminal stays selected in the background.
+4. **Tap Ctrl+Alt, release both keys, and speak.** A small indicator beside the cursor shows the recording time. Tap the same shortcut again when you finish. Recording also stops after 60 seconds by default.
+5. **Review the text.** A box at the top right shows the transcript and its destination. Click **Accept** to send it or **Reject** to discard it. Hover over the box to pause the countdown.
+
+**With the starting settings, the text is accepted automatically after 3 seconds, then Enter is pressed in the terminal.** To leave the text there for editing, turn off **Settings → Typing → Press Enter after the text**. You can also increase the review countdown.
+
+The first dictation may take longer because Whisper has to load the model. Later dictations reuse it until it unloads after a period of inactivity.
+
+The tray icon shows the current state: **gray** = no terminal selected, **orange** = ready, **red** = recording, **yellow** = transcribing.
+
+## Settings
+
+Click the tray microphone, then **Settings**. Most everyday changes can be made here without editing a file.
+
+| I want to… | Where to change it |
+|---|---|
+| Speak a different language | **Speech recognition → Language**. Choose the language you normally speak. |
+| Change the recording shortcut | **Shortcuts → Start and stop recording**. Click the shortcut field and press your new combination. |
+| Keep Ctrl+Tab for my browser or editor | **Shortcuts → Show the terminal list**. Choose another shortcut or click **Turn off**. |
+| Use different mouse buttons | **Shortcuts → Mouse buttons**. Choose a combination, or **Off**. |
+| Review the text for longer | **Typing → Send on its own after**. Hovering over the review box also pauses its countdown. |
+| Send immediately without the review box | Turn off **Typing → Ask before sending**. |
+| Type into the terminal without submitting | Turn off **Typing → Press Enter after the text**. This is also available in the tray menu. |
+| Record longer than a minute | **Recording → Stop recording after**. |
+| Hide the indicator beside the mouse | Turn off **Typing → Show the recording pill next to the cursor**. |
+| Stop launching automatically | Turn off **General → Start with Windows**. |
+| Release GPU memory sooner | **Speech recognition → Free the graphics memory after**. Starts at 15 minutes; 0 keeps the model loaded. |
+| Use another downloaded model | **Speech recognition → Model**. The list shows `.bin` files in the same folder as the configured model. |
+
+Click **Save** when you finish. Changes to shortcuts or speech recognition show **Save and restart** instead; finish any recording before saving those changes.
+
+<details>
+<summary>Advanced: editing config.json directly</summary>
+
+Settings are stored in [`config.json`](config.json) in the project folder. After editing it by hand, choose **Restart** from the tray menu.
+
+| Setting | What it controls |
+|---|---|
+| `whisper.server` / `whisper.model` | Full paths to the Whisper server and model. |
+| `whisper.port` / `whisper.threads` | Local server port and CPU thread count; start at `8178` and `4`. |
+| `terminalsHotkey` | Shortcut for the terminal list. An empty string disables it. |
+| `mouseHotkey` | Mouse button combination: `4` is Back, `5` is Forward, `3` is Middle. `[]` disables it. |
+| `mouseHoldMs` | Hold time for the mouse terminal list. The included config uses `1000` milliseconds; `0` disables this gesture. |
+| `select` | Button for selecting terminals and capturing the screen. For example, `{ "mouseButton": 4 }` or `{ "key": "F13" }`. |
+| `screenshotsDir` | Capture folder. An empty string uses the default. Use a dedicated folder without spaces; files older than 7 days are cleaned up there. |
+| `screenRecord` | Screen capture interval, frame limit, and image size. Starts at one check per second, a frame limit of 10, and `maxWidth: 1920`. |
+| `silenceLevel` | Minimum audio level to transcribe. Starts at `0.015`; lower it if quiet speech is skipped, or raise it if background noise produces unwanted text. |
+
+</details>
+
+## Shortcuts
+
+These are the shortcuts in the included configuration. **Back** and **Forward** mean the two side buttons on a typical mouse.
+
+### Recording and choosing a terminal
+
+| Action | Shortcut |
+|---|---|
+| Start or stop voice recording | Tap **Ctrl+Alt**, then release both keys. Alternatively, briefly press **Back + Forward** together. |
+| Choose a terminal by clicking it | While not recording, hold **Back** and left-click the terminal window. |
+| Open the terminal list with the keyboard | Hold **Ctrl**, press **Tab** to move through the list, and release **Ctrl** to select. **Shift+Tab** moves back; **Esc** cancels. |
+| Open the terminal list with the mouse | Hold **Back + Forward** for 1 second, then click a terminal while still holding the buttons. This selects a target and cancels the recording that the initial press started. |
+| Reject a transcript during review | Press the recording shortcut again, press **Back + Forward**, or click **Reject**. |
+
+**Ctrl+Tab is a global shortcut while the helper runs.** Browsers and editors will no longer receive it for switching tabs. Change it or turn it off in Settings if you use it elsewhere.
+
+### Include something from your screen
+
+Start a voice recording first, then use either gesture:
+
+| What to capture | Gesture |
+|---|---|
+| One area of the screen | Hold **Back**, drag across the area, then release. No left-click is needed. |
+| A sequence of screen changes | Tap **Back** to begin capturing, then tap it again to stop. Ending voice recording also stops the capture. |
+
+For example: say *“This is the error I mean,”* capture the error, then continue explaining.
+
+Screen recording saves a **sequence of still images**, not a video file. It checks the monitor under the cursor and keeps frames when the screen or pointer changes. The capture interval and frame limit are adjustable in **Settings → Screen recording**.
+
+The helper inserts image paths into the dictated text near the corresponding part of your speech. An assistant that can read local images can use them; an ordinary shell receives the paths as text.
+
+### Dictate into another app
+
+1. Press **Back + Forward** together to start recording.
+2. While still holding both buttons, left-click the input area in an editor, browser, or chat, before the terminal list opens.
+3. Release the buttons, speak, then use the recording shortcut to stop.
+4. Review and accept the text as usual.
+
+For this recording, the clicked window becomes the destination. The helper brings that window to the foreground when typing. Your selected terminal stays available for later recordings.
+
+Only text is sent in this mode. **Press Enter when typing into other apps** is a separate setting under **Typing**, and is on in the included configuration. Turn it off if you want to edit the text before submitting a chat message.
+
+## Troubleshooting
+
+| What you see | What to try |
+|---|---|
+| `npm` is not recognized | Install Node.js, then open a new terminal in the project folder. |
+| PowerShell says `npm.ps1` cannot run | Run `npm.cmd install` and `npm.cmd start`, or use Command Prompt. |
+| Electron is missing when you start | Run `node node_modules/electron/install.js` in the project folder, then try `npm start` again. |
+| “Whisper server not found” or “model not found” | Check the two file paths in `config.json`. They must point to existing files on your PC. Restart after editing. |
+| Whisper exits or never becomes ready | Keep the extracted DLLs beside the executable and use a build compatible with your hardware. The launching terminal shows error details. |
+| “Heard nothing” or a microphone error | Check the default input device and microphone access for desktop apps in Windows Settings. If quiet speech is skipped, lower **Recording → Treat as silence below** slightly. |
+| The transcript is in the wrong language | Choose a specific language under **Speech recognition → Language** instead of automatic detection. |
+| The terminal is missing or sending fails | Open the terminal and select it again. A non-administrator helper cannot send to a terminal running as administrator. |
+| Several terminal tabs share one window | Select the exact terminal from the tray list. If clicking a window is ambiguous, the helper asks you to choose. |
+| The overlay does not appear over a game | Use borderless or windowed mode. Exclusive full screen can hide overlays, and some games may block shortcuts. |
+| Starting the app opens its menu | It is already running. The helper keeps one instance. |
+
+## Optional: show which terminal is selected
+
+To add a **● Selected / ○ Not selected** indicator to PowerShell, Git Bash, and Claude Code's status line, run this from the project folder:
+
+```powershell
+npm run install-prompt
+```
+
+This updates the relevant shell profiles and Claude Code settings. Open a new shell session to load the prompt change. Command Prompt (`cmd`) is not covered.
+
+To remove the indicator:
+
+```powershell
+npm run install-prompt -- --uninstall
+```
+
+## Local files and privacy
+
+Audio is transcribed locally by Whisper. The helper sends the resulting text and any image paths to the destination you choose. If that destination is a cloud-connected assistant, it may send that content to its own service.
+
+- **App settings:** `config.json` in the project folder.
+- **Saved terminal selection:** `%APPDATA%\claude-terminal-assistant\state.json`.
+- **Screenshots and screen frames:** `%APPDATA%\claude-terminal-assistant\screenshots`, unless you set a custom capture folder. Files older than 7 days are pruned when the helper starts.
+
+## Remove the app
+
+1. Turn off **Settings → General → Start with Windows**.
+2. If you installed the terminal indicator, run the uninstall command above while the project folder still exists.
+3. Choose **Quit** from the tray menu, then delete the project folder.
+4. To also remove saved state and captures, delete `%APPDATA%\claude-terminal-assistant` and any custom capture folder you configured.
+
+<details>
+<summary>For contributors</summary>
+
+Run commands from the project folder:
+
+| Command | Purpose |
+|---|---|
+| `npm start` | Run the Electron tray app and view logs in the terminal. |
+| `npm test` | Run the unit tests. |
+| `npm run terminals` | List the terminals the helper can offer as targets. |
+| `npm run terminals -- --all` | Include hidden consoles for debugging. |
+
+</details>

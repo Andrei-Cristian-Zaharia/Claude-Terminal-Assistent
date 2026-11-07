@@ -1,4 +1,4 @@
-# Terminal Claude Helper: prints a line above the bash prompt that shows whether this terminal
+# Claude Terminal Assistant: prints a line above the bash prompt that shows whether this terminal
 # is the voice target. Sourced from ~/.bashrc by scripts/install-prompt.cjs.
 
 __tch_script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/src/statusline.cjs"

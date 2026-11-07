@@ -1,4 +1,4 @@
-# Terminal Claude Helper: prints a line above the PowerShell prompt that shows whether this
+# Claude Terminal Assistant: prints a line above the PowerShell prompt that shows whether this
 # terminal is the voice target. Dot-sourced from the PowerShell profile by
 # scripts/install-prompt.cjs; it wraps whatever prompt function the profile set up before it.
 # Kept ASCII-only (the symbols are built from char codes) because Windows PowerShell 5.1 reads

@@ -45,6 +45,15 @@
 <body class="loading">
 <main>
   <section>
+    <h2>General</h2>
+    <div class="field">
+      <label for="startAtLogin">Start with Windows</label>
+      <div class="help">The helper starts in the tray when you sign in, ready to use.</div>
+      <div class="control"><span class="switch"><input type="checkbox" id="startAtLogin"><span></span></span></div>
+    </div>
+  </section>
+
+  <section>
     <h2>Shortcuts</h2>
     <div class="field" data-field="hotkey">
       <span class="label" id="hotkey-label">Start and stop recording</span>
@@ -264,6 +273,7 @@ function render() {
   $("selectKey").hidden = !sel.key;
   if (sel.key) showKeys($("selectKey"), sel.key);
   for (const id of ["pressEnter", "dictationEnter"]) $(id).checked = !!draft[id];
+  $("startAtLogin").checked = draft.startAtLogin !== false;
   $("confirmEnabled").checked = draft.confirm.enabled !== false;
   $("confirmSeconds").value = draft.confirm.seconds;
   $("confirmSeconds").disabled = draft.confirm.enabled === false;
@@ -360,6 +370,7 @@ $("mouseHold").addEventListener("input", (e) => { draft.mouseHoldMs = Math.round
 for (const id of ["pressEnter", "dictationEnter", "cursorIndicator"]) $(id).addEventListener("change", (e) => { draft[id] = e.target.checked; });
 $("confirmEnabled").addEventListener("change", (e) => { draft.confirm.enabled = e.target.checked; $("confirmSeconds").disabled = !e.target.checked; });
 $("confirmSeconds").addEventListener("input", (e) => { draft.confirm.seconds = Number(e.target.value); });
+$("startAtLogin").addEventListener("change", (e) => { draft.startAtLogin = e.target.checked; });
 $("showNext").addEventListener("change", (e) => { draft.statusLine.showNext = e.target.checked; });
 $("maxRecordSeconds").addEventListener("input", (e) => { draft.maxRecordSeconds = Number(e.target.value); });
 $("silenceLevel").addEventListener("input", (e) => {

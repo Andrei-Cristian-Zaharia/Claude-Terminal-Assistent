@@ -125,7 +125,9 @@ menu.onState((s) => {
   requestAnimationFrame(() => {
     requestAnimationFrame(() => document.body.classList.remove("loading"));
     menu.size(Math.ceil(document.querySelector(".panel").getBoundingClientRect().height) + 12);
-    (document.querySelector('.row[aria-checked="true"]') ?? document.querySelector(".row") ?? rec).focus({ preventScroll: true });
+    // No row gets the focus on open: the dot already shows the picked terminal, and a focus ring
+    // around it would only repeat that. The arrow keys start from the picked one (below).
+    document.activeElement?.blur();
   });
 });
 
@@ -141,7 +143,8 @@ window.addEventListener("keydown", (e) => {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   const rows = [...document.querySelectorAll(".row")];
   if (!rows.length) return;
-  const i = rows.indexOf(document.activeElement);
+  let i = rows.indexOf(document.activeElement);
+  if (i < 0) i = rows.findIndex((r) => r.getAttribute("aria-checked") === "true"); // nothing focused yet
   const next = rows[(i + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length];
   next.focus();
   e.preventDefault();
