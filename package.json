@@ -3,6 +3,8 @@
   "productName": "Claude Terminal Assistant",
   "version": "1.0.0",
   "description": "Voice-control a chosen terminal from anywhere with a global hotkey and local Whisper",
+  "repository": { "type": "git", "url": "https://github.com/Andrei-Cristian-Zaharia/ClaudeTerminalAssistent.git" },
+  "bugs": { "url": "https://github.com/Andrei-Cristian-Zaharia/ClaudeTerminalAssistent/issues" },
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",

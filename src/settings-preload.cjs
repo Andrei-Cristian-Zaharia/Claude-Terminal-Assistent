@@ -6,4 +6,6 @@ contextBridge.exposeInMainWorld("settings", {
   // While a shortcut is being recorded, the app's own hotkeys are paused so they don't fire.
   capturing: (on) => ipcRenderer.send("settings:capturing", on),
   close: () => ipcRenderer.send("settings:close"),
+  openLog: () => ipcRenderer.send("settings:openLog"),
+  report: () => ipcRenderer.send("settings:report"),
 });

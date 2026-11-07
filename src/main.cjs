@@ -1,8 +1,9 @@
 // Tray app: pick a target terminal, then press the global hotkey anywhere (even in a game) to
 // dictate a command. Flow: hotkey -> record (hidden window) -> local Whisper -> typed into target.
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
-const { app, Tray, BrowserWindow, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen } = require("electron");
+const { app, Tray, BrowserWindow, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
 const { uIOhook, UiohookKey } = require("uiohook-napi");
 const { Whisper, isHallucination, peakLevel } = require("./whisper.cjs");
 const screenrec = require("./screenrec.cjs");
@@ -10,6 +11,7 @@ const { grab } = require("./screen-grab.cjs");
 const { terminalLabel, keycaps, buttonName } = require("./labels.cjs");
 const { RESTART_KEYS, needsRestart, validate, formatConfig } = require("./settings-model.cjs");
 const { trayIcon } = require("./tray-icon.cjs");
+const { createLog, hookConsole } = require("./log.cjs");
 const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow } = require("./terminals.cjs");
 
 const ROOT = path.join(__dirname, "..");
@@ -41,6 +43,35 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
 }
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
+
+// ---------- log file ----------
+// %APPDATA%\claude-terminal-assistant\logs\app.log: everything printed below, uncaught errors, and
+// errors from the app's own windows (a failed preload, a crashed page). When the app starts with
+// Windows there is no terminal, so this is where problems show. Settings has Open log and Report
+// a problem.
+const LOG = createLog(path.join(app.getPath("userData"), "logs"));
+hookConsole(LOG);
+console.log(`[app] ${APP_NAME} ${app.getVersion()} starting (Electron ${process.versions.electron}, Windows ${os.release()})`);
+let crashNotified = false;
+function logCrash(kind, err) {
+  console.error(`[${kind}]`, err);
+  // Tell the person once per run; the details are in the log.
+  if (!crashNotified && app.isReady()) {
+    crashNotified = true;
+    notify(APP_NAME, "Something went wrong. Settings > Open log shows the details.");
+  }
+}
+process.on("uncaughtException", (err) => logCrash("uncaught", err));
+process.on("unhandledRejection", (reason) => logCrash("unhandled rejection", reason));
+app.on("web-contents-created", (_e, wc) => {
+  const page = () => path.basename(wc.getURL() || "page");
+  // One parameter: Electron 35+ puts level and message on the event (extra ones log a deprecation).
+  wc.on("console-message", (event) => {
+    if (event.level === "error") console.error(`[${page()}] ${event.message}`);
+  });
+  wc.on("preload-error", (_ev, preload, error) => console.error(`[${page()}] preload ${path.basename(preload)} failed:`, error));
+  wc.on("render-process-gone", (_ev, details) => console.error(`[${page()}] page process gone: ${details.reason} (exit ${details.exitCode})`));
+});
 // Started again (e.g. `npm start`) while already running, often from the login item: the new copy
 // quits at once, so show this one's menu to make clear it is there.
 app.on("second-instance", () => { if (tray && menuWin) showMenu(); });
@@ -647,6 +678,23 @@ ipcMain.handle("settings:save", (_e, next) => {
 });
 
 ipcMain.on("settings:capturing", (_e, on) => pauseHotkeys(!!on));
+ipcMain.on("settings:openLog", () => {
+  if (!fs.existsSync(LOG.file)) LOG.write("INFO", ["(log opened from Settings)"]);
+  shell.openPath(LOG.file);
+});
+// A new GitHub issue with the versions filled in. The log isn't attached: it holds dictated text,
+// so the person looks it over and attaches it.
+ipcMain.on("settings:report", () => {
+  const bugs = require(path.join(ROOT, "package.json")).bugs?.url;
+  if (!bugs) return shell.openPath(path.dirname(LOG.file));
+  const body = [
+    "**What happened**", "", "", "**What you expected**", "", "", "**Steps to reproduce**", "", "",
+    "---",
+    `${APP_NAME} ${app.getVersion()}, Electron ${process.versions.electron}, Windows ${os.release()}`,
+    "Log: Settings > Open log. Please attach it, or the lines around the problem. It contains the text you dictated, so look it over first.",
+  ].join("\n");
+  shell.openExternal(`${bugs}/new?title=${encodeURIComponent("Problem: ")}&body=${encodeURIComponent(body)}`);
+});
 ipcMain.on("settings:close", () => settingsWin?.close());
 
 // ---------- recording pipeline ----------

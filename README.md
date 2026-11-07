@@ -189,6 +189,7 @@ Only text is sent in this mode. **Press Enter when typing into other apps** is a
 | Several terminal tabs share one window | Select the exact terminal from the tray list. If clicking a window is ambiguous, the helper asks you to choose. |
 | The overlay does not appear over a game | Use borderless or windowed mode. Exclusive full screen can hide overlays, and some games may block shortcuts. |
 | Starting the app opens its menu | It is already running. The helper keeps one instance. |
+| Something else goes wrong | Open **Settings → Open log** to see what happened. To report it, click **Report a problem**: it opens a GitHub issue with your versions filled in. Attach the log, or the lines around the problem, after reading it over, because it also contains the text you dictated. |
 
 ## Optional: show which terminal is selected
 
@@ -198,9 +199,9 @@ To add a **● Selected / ○ Not selected** indicator to PowerShell, Git Bash, 
 npm run install-prompt
 ```
 
-This updates the relevant shell profiles and Claude Code settings. Open a new shell session to load the prompt change. Command Prompt (`cmd`) is not covered.
+This updates the relevant shell profiles and Claude Code settings. It also lets Claude Code open the screenshots and screen frames you dictate to it, in any project, without asking each time: the screenshots folder is added to Claude Code's allowed folders. Open a new shell session and restart Claude Code to load the changes. Command Prompt (`cmd`) is not covered.
 
-To remove the indicator:
+To remove the indicator and the screenshots permission:
 
 ```powershell
 npm run install-prompt -- --uninstall
@@ -213,6 +214,7 @@ Audio is transcribed locally by Whisper. The helper sends the resulting text and
 - **App settings:** `config.json` in the project folder.
 - **Saved terminal selection:** `%APPDATA%\claude-terminal-assistant\state.json`.
 - **Screenshots and screen frames:** `%APPDATA%\claude-terminal-assistant\screenshots`, unless you set a custom capture folder. Files older than 7 days are pruned when the helper starts.
+- **Log:** `%APPDATA%\claude-terminal-assistant\logs\app.log`, with what the helper did, any errors, and the text you dictated. It stays under about 1 MB; the previous one is kept as `app.old.log`. It never leaves your PC unless you attach it to a report.
 
 ## Remove the app
 
@@ -228,7 +230,7 @@ Run commands from the project folder:
 
 | Command | Purpose |
 |---|---|
-| `npm start` | Run the Electron tray app and view logs in the terminal. |
+| `npm start` | Run the Electron tray app and view logs in the terminal. The same lines go to the log file. |
 | `npm test` | Run the unit tests. |
 | `npm run terminals` | List the terminals the helper can offer as targets. |
 | `npm run terminals -- --all` | Include hidden consoles for debugging. |
