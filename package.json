@@ -3,27 +3,85 @@
   "productName": "Claude Terminal Assistant",
   "version": "1.0.0",
   "description": "Voice-control a chosen terminal from anywhere with a global hotkey and local Whisper",
-  "repository": { "type": "git", "url": "https://github.com/Andrei-Cristian-Zaharia/ClaudeTerminalAssistent.git" },
-  "bugs": { "url": "https://github.com/Andrei-Cristian-Zaharia/ClaudeTerminalAssistent/issues" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Andrei-Cristian-Zaharia/Claude-Terminal-Assistent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Andrei-Cristian-Zaharia/Claude-Terminal-Assistent/issues"
+  },
   "main": "src/main.cjs",
   "scripts": {
     "start": "electron .",
     "test": "node --test \"test/**/*.test.cjs\"",
     "terminals": "node src/console-helper.cjs list",
     "install-prompt": "node scripts/install-prompt.cjs",
-    "icon": "node scripts/make-icon.cjs"
+    "icon": "node scripts/make-icon.cjs",
+    "dist": "electron-builder --win --x64",
+    "release": "electron-builder --win --x64 --publish always"
   },
   "type": "commonjs",
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "koffi": "^3.3.7",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "electron": "^45.2.3"
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
   },
   "allowScripts": {
     "koffi@3.3.7": true,
-    "uiohook-napi": false
+    "uiohook-napi": false,
+    "electron-winstaller": false
   },
-  "private": true
+  "private": true,
+  "author": "Andrei-Cristian Zaharia",
+  "build": {
+    "appId": "com.zaharia.claude-terminal-assistant",
+    "productName": "Claude Terminal Assistant",
+    "copyright": "Andrei-Cristian Zaharia",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "assets/**",
+      "shell/**",
+      "config.default.json",
+      "package.json",
+      "!**/*.test.cjs"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Claude Terminal Assistant",
+      "uninstallDisplayName": "Claude Terminal Assistant",
+      "include": "build/installer.nsh"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Andrei-Cristian-Zaharia",
+        "repo": "claude-terminal-assistant-releases",
+        "releaseType": "release"
+      }
+    ]
+  }
 }

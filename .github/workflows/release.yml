@@ -1,0 +1,34 @@
+# Builds the Windows installer and publishes it as a release of the public releases repository
+# (package.json build.publish), where installed copies look for updates. Runs when a version tag
+# is pushed:
+#   1. set "version" in package.json (e.g. 1.2.0) and commit
+#   2. git tag v1.2.0 && git push origin v1.2.0
+# Needs the repository secret RELEASES_TOKEN: a fine-grained token with "Contents: read and
+# write" on Andrei-Cristian-Zaharia/claude-terminal-assistant-releases (this workflow's own
+# GITHUB_TOKEN can't write to another repository).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: The tag matches package.json
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME but package.json says $v"; exit 1; }
+      - name: Build and publish the installer
+        run: npx electron-builder --win --x64 --publish always
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}

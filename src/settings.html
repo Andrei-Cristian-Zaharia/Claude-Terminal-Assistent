@@ -16,6 +16,8 @@
   .field { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; align-items: center; padding: 10px 0; }
   .field > label, .field > .label { font-weight: 500; }
   .field .help { grid-column: 1; color: var(--muted); font-size: 12px; max-width: 46ch; }
+  .claude-state { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .claude-state.on { color: var(--done); }
   .field .help code { font: 11px "Cascadia Mono", Consolas, monospace; color: var(--ink); }
   .field .control { grid-column: 2; grid-row: 1 / span 2; justify-self: end; display: flex; align-items: center; gap: 8px; }
   .field .error { grid-column: 1 / -1; color: var(--danger); font-size: 12px; }
@@ -51,6 +53,23 @@
       <label for="startAtLogin">Start with Windows</label>
       <div class="help">The helper starts in the tray when you sign in, ready to use.</div>
       <div class="control"><span class="switch"><input type="checkbox" id="startAtLogin"><span></span></span></div>
+    </div>
+    <div class="field" data-field="claude">
+      <span class="label">Claude Code</span>
+      <div class="help" id="claudeHelp">Connect it for the cards when Claude finishes or needs you, the "Selected" line in its status bar and your shell prompts, and screenshots it opens without asking. Restart Claude Code sessions afterwards.</div>
+      <div class="control">
+        <span class="claude-state" id="claudeState"></span>
+        <button id="claudeConnect">Connect</button>
+      </div>
+      <div class="error"></div>
+    </div>
+    <div class="field">
+      <span class="label">Updates</span>
+      <div class="help" id="updateHelp">New versions download on their own; a card offers to restart into them.</div>
+      <div class="control">
+        <span class="claude-state" id="updateState"></span>
+        <button id="checkUpdates">Check now</button>
+      </div>
     </div>
     <div class="field">
       <span class="label">Log and problem reports</span>
@@ -168,6 +187,11 @@
 
   <section>
     <h2>Speech recognition</h2>
+    <div class="field">
+      <span class="label">Speech engine</span>
+      <div class="help">Download whisper.cpp and a model for your graphics card or processor, or use files you already have.</div>
+      <div class="control"><button id="openSetup">Download or change…</button></div>
+    </div>
     <div class="field" data-field="whisper.language">
       <label for="language">Language</label>
       <div class="help">Choose the language you speak. Detection can mistake short commands for another language.</div>
@@ -349,6 +373,10 @@ function updateFooter(message, isError) {
 async function init() {
   const data = await settings.load();
   original = data.config;
+  $("updateHelp").textContent = data.packaged
+    ? `Version ${data.version}. New versions download on their own; a card offers to restart into them.`
+    : `Version ${data.version}, run from source: update it with git pull.`;
+  $("checkUpdates").hidden = !data.packaged;
   draft = structuredClone(original);
   draft.screenRecord = { intervalMs: 1000, maxFrames: 10, maxWidth: 1920, ...draft.screenRecord };
   draft.statusLine = { showNext: true, ...draft.statusLine };
@@ -421,6 +449,44 @@ $("confirmPosition").addEventListener("change", (e) => { draft.confirm.position 
 $("confirmSeconds").addEventListener("input", (e) => { draft.confirm.seconds = Number(e.target.value); });
 $("startAtLogin").addEventListener("change", (e) => { draft.startAtLogin = e.target.checked; });
 $("openLog").addEventListener("click", () => settings.openLog());
+$("openSetup").addEventListener("click", () => settings.openSetup());
+
+// Claude Code connection: applied at once (it edits Claude Code's settings and the shell profiles,
+// not config.json), so it is not part of Save.
+function showClaude(connected) {
+  $("claudeState").textContent = connected ? "✓ Connected" : "Not connected";
+  $("claudeState").classList.toggle("on", connected);
+  $("claudeConnect").textContent = connected ? "Disconnect" : "Connect";
+  $("claudeConnect").className = connected ? "quiet" : "primary";
+  $("claudeConnect").dataset.connected = connected ? "1" : "";
+}
+settings.claudeStatus().then((s) => showClaude(s.connected));
+
+// Updates (the installed app only; a source checkout updates with git pull).
+async function checkUpdates() {
+  $("checkUpdates").disabled = true;
+  $("updateState").textContent = "Checking…";
+  const r = await settings.checkUpdates();
+  $("checkUpdates").disabled = false;
+  const ready = r.status === "ready";
+  $("updateState").classList.toggle("on", ready || r.status === "none");
+  $("updateState").textContent = {
+    none: "✓ Up to date", available: `Downloading ${r.version}…`, ready: `${r.version} is ready`,
+    error: "Couldn't check. Try again later.", dev: "",
+  }[r.status] ?? "";
+  $("checkUpdates").textContent = ready ? "Restart and update" : "Check now";
+  $("checkUpdates").className = ready ? "primary" : "";
+  $("checkUpdates").dataset.ready = ready ? "1" : "";
+}
+$("checkUpdates").addEventListener("click", () => ($("checkUpdates").dataset.ready ? settings.installUpdate() : checkUpdates()));
+$("claudeConnect").addEventListener("click", async () => {
+  const on = !$("claudeConnect").dataset.connected;
+  $("claudeConnect").disabled = true;
+  const r = await settings.claudeConnect(on);
+  $("claudeConnect").disabled = false;
+  setError("claude", r.ok ? "" : r.message);
+  if (r.ok) showClaude(r.connected);
+});
 $("report").addEventListener("click", () => settings.report());
 $("showNext").addEventListener("change", (e) => { draft.statusLine.showNext = e.target.checked; });
 $("notifyEnabled").addEventListener("change", (e) => {

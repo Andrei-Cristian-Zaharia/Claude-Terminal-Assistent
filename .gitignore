@@ -1,1 +1,5 @@
 node_modules/
+# Settings live in %APPDATA%\claude-terminal-assistant\config.json; config.default.json holds the defaults.
+config.json
+# Installer output (electron-builder).
+dist/

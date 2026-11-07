@@ -32,16 +32,17 @@ done.onState(({ cards, seconds }) => {
   total = seconds * 1000;
   const stack = $("stack");
   // The countdown bar sits on the newest "finished" card; cards asking for a permission stay up.
-  const timed = cards.find((c) => c.kind !== "ask")?.id;
+  const timed = cards.find((c) => c.kind === "done")?.id; // "Update ready" stays up too
   stack.replaceChildren(...cards.map((c) => {
     const ask = c.kind === "ask";
+    const update = c.kind === "update";
     const card = el("div", "card");
     card.dataset.id = c.id;
     const header = el("header");
     header.append(
       // No .pulse here: an endless animation kept this transparent window from showing.
       Object.assign(el("span", "lamp"), { style: `--lamp: var(${ask ? "--busy" : "--ready"})` }),
-      el("span", ask ? "label busy" : "label", ask ? "Claude needs you" : "Claude finished"),
+      el("span", ask ? "label busy" : "label", ask ? "Claude needs you" : update ? "Update ready" : "Claude finished"),
       el("span", "time", c.time),
     );
     card.append(
@@ -49,7 +50,7 @@ done.onState(({ cards, seconds }) => {
       el("div", "title", c.title),
       el("div", "where", [c.where, c.project].filter(Boolean).join(" · ")),
       el("div", "text", c.text),
-      el("div", "foot open", ask ? "Click to answer in the terminal" : "Click to open"),
+      el("div", "foot open", ask ? "Click to answer in the terminal" : update ? "Click to restart and update" : "Click to open"),
       Object.assign(el("button", "close", "✕"), { tabIndex: -1 }),
     );
     if (c.id === timed) card.append(el("div", "timer"));

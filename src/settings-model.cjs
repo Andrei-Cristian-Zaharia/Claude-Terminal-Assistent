@@ -1,6 +1,6 @@
 const { CORNERS } = require("./corners.cjs");
 
-// The settings window edits config.json. This file holds the parts that are plain data: checking
+// The settings window edits the settings (config.json in the data folder, see config-store.cjs). This file holds the parts that are plain data: checking
 // a new config, telling whether it needs a restart, and writing it back in the file's own style.
 
 // Read once at startup (hooks, hotkey registration, the Whisper server's arguments): changing them
@@ -49,7 +49,7 @@ function validate(c, keyNames = []) {
   if (!isInt(sr.intervalMs, 250, 10000)) bad("screenRecord.intervalMs", "Frame interval must be 0.25 to 10 seconds.");
   if (!isInt(sr.maxFrames, 1, 30)) bad("screenRecord.maxFrames", "Keep 1 to 30 frames.");
   const w = c.whisper ?? {};
-  if (typeof w.model !== "string" || !w.model) bad("whisper.model", "Choose a Whisper model.");
+  if (typeof w.model !== "string") bad("whisper.model", "Choose a Whisper model."); // empty: not set up yet
   if (typeof w.language !== "string" || !w.language) bad("whisper.language", "Choose a language.");
   if (!isInt(w.idleUnloadMinutes, 0, 240)) bad("whisper.idleUnloadMinutes", "Unload time must be 0 to 240 minutes.");
   if (!isInt(w.threads, 1, 32)) bad("whisper.threads", "Threads must be 1 to 32.");

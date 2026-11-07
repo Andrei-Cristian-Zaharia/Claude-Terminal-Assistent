@@ -7,10 +7,10 @@ const { acceleratorKey, uiohookKey, shortcutRecorder } = require("../src/keys.js
 const { terminalLabel, keycaps, buttonName } = require("../src/labels.cjs");
 const { micBitmap, micDistance, appIconBitmap } = require("../src/tray-icon.cjs");
 
-const CONFIG_FILE = path.join(__dirname, "..", "config.json");
+const CONFIG_FILE = path.join(__dirname, "..", "config.default.json");
 const KEY_NAMES = ["A", "F13", "Ctrl", "CtrlRight", "Space", "1"];
 
-test("formatConfig writes config.json back exactly as it is", () => {
+test("formatConfig writes config.default.json back exactly as it is", () => {
   const text = fs.readFileSync(CONFIG_FILE, "utf8");
   assert.strictEqual(`${formatConfig(JSON.parse(text))}\n`, text.replace(/\r\n/g, "\n"));
   assert.strictEqual(formatConfig({ a: [], b: {} }), '{ "a": [], "b": {} }');

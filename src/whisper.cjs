@@ -18,7 +18,7 @@ class Whisper {
     if (this.ready) return this.ready;
     const { server, model, language = "auto", port = 8178, threads = 4 } = this.cfg;
     for (const [label, file] of [["whisper-server", server], ["model", model]]) {
-      if (!file || !fs.existsSync(file)) return Promise.reject(new Error(`Whisper ${label} not found: ${file}. Fix config.json.`));
+      if (!file || !fs.existsSync(file)) return Promise.reject(new Error(`Whisper ${label} not found${file ? `: ${file}` : ""}. Set up speech recognition in Settings.`));
     }
     // No "-nt": with timestamps on, verbose_json carries the start time of every word, which is
     // how screen-recording frames are placed into the transcript. Plain text is unaffected.

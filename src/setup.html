@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'">
+<title>Set up speech recognition</title>
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* First run (or Settings > Speech recognition): download whisper.cpp and a model, or point at
+     files already on the PC. main.cjs does the work ("speech recognition setup"). */
+  body { display: flex; flex-direction: column; height: 100vh; }
+  main { flex: 1; overflow-y: auto; padding: 22px 26px 8px; }
+  h1 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+  .intro { margin: 0 0 18px; color: var(--muted); max-width: 60ch; }
+  h2 { margin: 18px 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); }
+  .choices { display: grid; gap: 8px; }
+  .choice {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 2px 12px; align-items: center; text-align: left;
+    padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); cursor: pointer;
+  }
+  .choice:hover { background: var(--hover); }
+  .choice[aria-checked="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--raised) 90%, var(--accent)); }
+  .choice .radio { grid-row: 1 / span 2; width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--line); }
+  .choice[aria-checked="true"] .radio { border-color: var(--accent); background: radial-gradient(var(--accent) 0 3.5px, transparent 4px); }
+  .choice .name { font-weight: 600; }
+  .choice .size { grid-row: 1 / span 2; grid-column: 3; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .choice .note { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .choice .found { color: var(--done); }
+  select { font: inherit; color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  .total { margin-top: 16px; color: var(--muted); font-size: 12px; }
+  .total b { color: var(--ink); font-weight: 600; }
+  /* Progress */
+  .task { margin: 10px 0 14px; }
+  .task .row { display: flex; justify-content: space-between; font-size: 13px; }
+  .task .row .num { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .bar { height: 6px; margin-top: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 0; background: var(--accent); }
+  .task.done .row .num { color: var(--done); }
+  .task.done .bar span { background: var(--done); }
+  .steps { margin: 6px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 13px; }
+  .steps li { padding: 3px 0; }
+  .steps li.now { color: var(--ink); }
+  .steps li.ok { color: var(--done); }
+  .message { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+  .message.error { background: color-mix(in srgb, var(--danger) 14%, var(--surface)); color: #ffc9c9; }
+  .message.ready { background: color-mix(in srgb, var(--done) 12%, var(--surface)); color: #c8f7d6; }
+  .message:empty { display: none; }
+  footer { display: flex; align-items: center; gap: 8px; padding: 12px 26px; background: var(--sunk); border-top: 1px solid var(--line); }
+  footer .note { flex: 1; color: var(--faint); font-size: 12px; }
+</style>
+</head>
+<body class="loading">
+<main>
+  <h1>Set up speech recognition</h1>
+  <p class="intro">Your speech is turned into text on this PC by whisper.cpp; nothing is sent to the cloud. Choose how to run it, and the helper downloads it once.</p>
+
+  <div id="choose">
+    <h2>Run it on</h2>
+    <div class="choices" id="engines" role="radiogroup"></div>
+    <h2>Model</h2>
+    <div class="choices" id="models" role="radiogroup"></div>
+    <h2>Language you speak</h2>
+    <select id="language"></select>
+    <div class="total" id="total"></div>
+  </div>
+
+  <div id="progress" hidden>
+    <div class="task" id="taskEngine"><div class="row"><span>whisper.cpp</span><span class="num"></span></div><div class="bar"><span></span></div></div>
+    <div class="task" id="taskModel"><div class="row"><span id="modelName">Model</span><span class="num"></span></div><div class="bar"><span></span></div></div>
+    <ul class="steps">
+      <li id="stepExtract">Unpack whisper.cpp</li>
+      <li id="stepTest">Load the model and check it works</li>
+    </ul>
+  </div>
+  <div class="message" id="message"></div>
+</main>
+<footer>
+  <span class="note" id="footNote"></span>
+  <button class="quiet" id="existing">I already have whisper.cpp…</button>
+  <button class="quiet" id="cancel">Not now</button>
+  <button class="primary" id="start">Download and set up</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const LANGUAGES = [
+  ["auto", "Detect automatically"], ["romanian", "Romanian"], ["english", "English"], ["german", "German"],
+  ["french", "French"], ["spanish", "Spanish"], ["italian", "Italian"], ["hungarian", "Hungarian"],
+  ["russian", "Russian"], ["ukrainian", "Ukrainian"],
+];
+const fmt = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1024 ** 2))} MB`);
+let info, engine, model, running = false, finished = false;
+
+function radio(container, items, selected, onPick) {
+  container.replaceChildren(...items.map((it) => {
+    const b = el("button", "choice");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(it.id === selected));
+    b.append(el("span", "radio"), el("span", "name", it.label), el("span", "size", it.size ? `~${fmt(it.size)}` : ""));
+    const note = el("span", "note", it.note);
+    if (it.found) note.append(" ", el("span", "found", it.found));
+    b.append(note);
+    b.addEventListener("click", () => onPick(it.id));
+    return b;
+  }));
+}
+
+function render() {
+  radio($("engines"), [
+    { id: "gpu", label: "NVIDIA graphics card", size: info.engineSize.gpu, note: "Fast: a short command takes under a second. Uses the card's memory while loaded.", found: info.nvidia ? `Found: ${info.nvidia}` : "" },
+    { id: "cpu", label: "Processor only", size: info.engineSize.cpu, note: "Works on any PC; transcribing takes a few seconds." },
+  ], engine, (id) => { engine = id; model = info.defaultModel[id]; render(); });
+  radio($("models"), info.models.map((m) => ({ id: m.id, label: m.label, size: m.size, note: m.note })), model, (id) => { model = id; render(); });
+  const total = (info.engineSize[engine] ?? 0) + (info.models.find((m) => m.id === model)?.size ?? 0);
+  $("total").replaceChildren("Download: ", el("b", "", `about ${fmt(total)}`), ` · saved in ${info.dir}`);
+}
+
+function setTask(id, done, total, finishedTask) {
+  const t = $(id);
+  t.classList.toggle("done", !!finishedTask);
+  t.querySelector(".bar span").style.width = `${total ? Math.min(100, (100 * done) / total) : 0}%`;
+  t.querySelector(".num").textContent = finishedTask ? "✓ Done" : total ? `${fmt(done)} of ${fmt(total)}` : "Waiting";
+}
+function setStep(id, state) { $(id).className = state; if (state === "ok") $(id).textContent = `✓ ${$(id).textContent.replace(/^✓ /, "")}`; }
+
+setup.onProgress((p) => {
+  if (p.step === "engine") setTask("taskEngine", p.done, p.total, p.done >= p.total && p.total > 0);
+  if (p.step === "model") { setTask("taskEngine", 1, 1, true); setTask("taskModel", p.done, p.total, p.done >= p.total && p.total > 0); }
+  if (p.step === "extract") { setTask("taskModel", 1, 1, true); setStep("stepExtract", "now"); }
+  if (p.step === "test") { setStep("stepExtract", "ok"); setStep("stepTest", "now"); }
+  if (p.step === "ready") setStep("stepTest", "ok");
+});
+
+function showMessage(kind, text) { $("message").className = `message ${kind}`; $("message").textContent = text; }
+
+function setRunning(on) {
+  running = on;
+  $("start").hidden = on;
+  $("existing").hidden = on;
+  $("cancel").textContent = on ? "Cancel" : "Not now";
+}
+
+function showDone(text) {
+  finished = true;
+  setRunning(false);
+  showMessage("ready", text);
+  $("start").hidden = $("existing").hidden = true;
+  $("cancel").textContent = "Close";
+  $("cancel").className = "primary";
+}
+
+$("start").addEventListener("click", async () => {
+  $("choose").hidden = true;
+  $("progress").hidden = false;
+  $("modelName").textContent = info.models.find((m) => m.id === model)?.label ?? "Model";
+  setTask("taskEngine", 0, 0); setTask("taskModel", 0, 0);
+  showMessage("", "");
+  setRunning(true);
+  const r = await setup.start({ engine, model, language: $("language").value });
+  if (r.ok) return showDone(`Ready. ${info.shortcut}, speak, and the text goes to the terminal you picked.`);
+  setRunning(false);
+  if (r.cancelled) { $("choose").hidden = false; $("progress").hidden = true; return showMessage("", ""); }
+  $("start").textContent = "Try again";
+  showMessage("error", r.message + (engine === "gpu" ? " If the graphics card build doesn't work on this PC, choose Processor only." : ""));
+  $("choose").hidden = false;
+});
+
+$("existing").addEventListener("click", async () => {
+  showMessage("", "");
+  const r = await setup.useExisting($("language").value);
+  if (r.ok) showDone(`Ready: using ${r.model}. ${info.shortcut}, speak, and the text goes to the terminal you picked.`);
+  else if (!r.cancelled) showMessage("error", r.message);
+});
+
+$("cancel").addEventListener("click", () => (running ? setup.cancel() : setup.close()));
+window.addEventListener("keydown", (e) => { if (e.key === "Escape" && !running) setup.close(); });
+
+(async () => {
+  info = await setup.info();
+  engine = info.nvidia ? "gpu" : "cpu";
+  model = info.defaultModel[engine];
+  $("language").replaceChildren(...LANGUAGES.map(([v, t]) => new Option(t, v)));
+  $("language").value = LANGUAGES.some(([v]) => v === info.language) ? info.language : "auto";
+  $("footNote").textContent = info.current ? `Now: ${info.current}` : "";
+  render();
+  requestAnimationFrame(() => document.body.classList.remove("loading"));
+})();
+</script>
+</body>
+</html>

@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { app, Tray, BrowserWindow, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
+const { app, Tray, BrowserWindow, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
 const { uIOhook, UiohookKey } = require("uiohook-napi");
 const { Whisper, isHallucination, peakLevel } = require("./whisper.cjs");
 const screenrec = require("./screenrec.cjs");
@@ -19,11 +19,13 @@ const corners = require("./corners.cjs");
 const { startMouseGuard } = require("./mouse-guard.cjs");
 
 const ROOT = path.join(__dirname, "..");
-const CONFIG_FILE = path.join(ROOT, "config.json");
+const { loadConfig } = require("./config-store.cjs");
+const claudeSetup = require("./claude-setup.cjs");
 const APP_ICON = path.join(ROOT, "assets", "icon.png"); // npm run icon
 const MIN_WAV_BYTES = 44 + 16000 * 2 * 0.3; // ignore taps shorter than 0.3 s
 
 const APP_NAME = "Claude Terminal Assistant";
+const APP_ID = "com.zaharia.claude-terminal-assistant"; // the installer's appId (package.json build.appId)
 
 // Data (state.json, screenshots) lives in %APPDATA%\claude-terminal-assistant: no spaces, because
 // screenshot paths are typed into terminals. Before the rename it was terminal-claude-helper; it is
@@ -44,6 +46,26 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
     }
   }
   app.setPath("userData", dataDir);
+}
+
+// Settings: %APPDATA%claude-terminal-assistantconfig.json (config-store.cjs), defaults from
+// config.default.json. In the data folder so an installed app keeps them across updates.
+const CONFIG_FILE = path.join(app.getPath("userData"), "config.json");
+
+// The uninstaller runs the exe with --uninstall-cleanup before it removes the files (not on an
+// update): Claude Code and the shells are disconnected and the Start with Windows entry is
+// removed, since both would point at a program that is gone.
+if (process.argv.includes("--uninstall-cleanup")) {
+  try {
+    claudeSetup.connect({
+      dataDir: app.getPath("userData"), appDir: ROOT, exe: process.execPath, uninstall: true,
+      shotsDir: loadConfig(app.getPath("userData"), ROOT).screenshotsDir || path.join(app.getPath("userData"), "screenshots"),
+    });
+  } catch {}
+  for (const name of [APP_NAME, "Terminal Claude Helper"]) {
+    try { app.setLoginItemSettings({ path: process.execPath, args: [], name, openAtLogin: false }); } catch {}
+  }
+  app.exit(0);
 }
 
 if (!app.requestSingleInstanceLock()) app.exit(0);
@@ -80,10 +102,11 @@ app.on("web-contents-created", (_e, wc) => {
 // quits at once, so show this one's menu to make clear it is there.
 app.on("second-instance", () => { if (tray && menuWin) showMenu(); });
 
-// Start with Windows (config "startAtLogin", default on): a per-user Run entry that launches this
-// Electron with the project folder, straight into the tray. Written at every start so it follows
-// the project if it moves; turning the setting off removes it.
-const LOGIN_ITEM = { path: process.execPath, args: [app.getAppPath()], name: APP_NAME };
+// Start with Windows (config "startAtLogin", default on): a per-user Run entry that launches the
+// app straight into the tray: the installed exe, or from a source checkout this Electron with the
+// project folder. Written at every start so it follows the app if it moves; turning the setting
+// off removes it.
+const LOGIN_ITEM = { path: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], name: APP_NAME };
 function applyStartAtLogin() {
   try {
     app.setLoginItemSettings({ ...LOGIN_ITEM, name: "Terminal Claude Helper", openAtLogin: false }); // the name before the rename
@@ -93,7 +116,7 @@ function applyStartAtLogin() {
   }
 }
 
-const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+const cfg = loadConfig(app.getPath("userData"), ROOT);
 const whisper = new Whisper(cfg.whisper);
 const stateFile = () => path.join(app.getPath("userData"), "state.json");
 
@@ -665,6 +688,133 @@ function openSettings() {
   settingsWin.loadFile(path.join(__dirname, "settings.html"));
 }
 
+// ---------- speech recognition setup ----------
+// setup.html: shown at startup while whisper.cpp or its model is missing (a fresh install), from
+// Settings > Speech recognition, and when a recording starts without it. It downloads the server
+// (the NVIDIA or the CPU build, found in whisper.cpp's releases, whisper-setup.cjs) and a model
+// into %LOCALAPPDATA%\claude-terminal-assistant\whisper (local, not roaming: the model is large),
+// or takes files already on the PC; then it starts Whisper once to check it works.
+const WHISPER_DIR = path.join(process.env.LOCALAPPDATA ?? app.getPath("appData"), "claude-terminal-assistant", "whisper");
+const ws = require("./whisper-setup.cjs");
+let setupWin = null;
+let setupAbort = null;
+let releasesCache = null;
+const whisperFilesOk = () => [cfg.whisper?.server, cfg.whisper?.model].every((f) => f && fs.existsSync(f));
+
+function openSetup() {
+  if (setupWin && !setupWin.isDestroyed()) { setupWin.show(); setupWin.focus(); return; }
+  setupWin = new BrowserWindow({
+    width: 620, height: 820, minWidth: 520, minHeight: 520, show: false, title: "Set up speech recognition",
+    backgroundColor: "#1f2023", autoHideMenuBar: true, icon: APP_ICON,
+    webPreferences: { preload: path.join(__dirname, "setup-preload.cjs") },
+  });
+  setupWin.setMenu(null);
+  setupWin.once("ready-to-show", () => setupWin.show());
+  setupWin.on("closed", () => { setupAbort?.abort(); setupWin = null; });
+  setupWin.loadFile(path.join(__dirname, "setup.html"));
+}
+
+async function whisperReleases(signal) {
+  if (releasesCache) return releasesCache;
+  const res = await fetch(ws.RELEASES_API, { signal, headers: { "User-Agent": "claude-terminal-assistant", Accept: "application/vnd.github+json" } });
+  if (!res.ok) throw new Error(`Couldn't reach GitHub to find whisper.cpp (HTTP ${res.status}).`);
+  return (releasesCache = await res.json());
+}
+
+// Writes the settings to the data folder.
+function saveConfig() {
+  fs.writeFileSync(CONFIG_FILE, `${formatConfig(cfg)}\n`);
+}
+// A new Whisper setup, applied without a restart.
+function useWhisper(server, model, language) {
+  cfg.whisper = { ...cfg.whisper, server, model, ...(language ? { language } : {}) };
+  saveConfig();
+  whisper.stop();
+  whisper.cfg = cfg.whisper;
+}
+
+ipcMain.handle("setup:info", async () => {
+  let nvidia = "";
+  try {
+    const gpu = await app.getGPUInfo("complete");
+    const dev = (gpu.gpuDevice ?? []).find((d) => d.vendorId === 0x10de);
+    if (dev) nvidia = dev.deviceString || "an NVIDIA card";
+  } catch {}
+  const engineSize = { gpu: 650 * 1024 ** 2, cpu: 8 * 1024 ** 2 }; // replaced by the real sizes when GitHub answers
+  try {
+    const releases = await whisperReleases(AbortSignal.timeout(6000));
+    for (const e of ["gpu", "cpu"]) { const a = ws.pickAsset(releases, e); if (a) engineSize[e] = a.size; }
+  } catch {}
+  return {
+    nvidia, engineSize, models: ws.MODELS, dir: WHISPER_DIR, language: cfg.whisper?.language ?? "auto",
+    defaultModel: { gpu: ws.defaultModel("gpu"), cpu: ws.defaultModel("cpu") },
+    shortcut: `Tap ${keycaps(cfg.hotkey).join("+")}`,
+    current: whisperFilesOk() ? path.basename(cfg.whisper.model) : "",
+  };
+});
+
+ipcMain.handle("setup:start", async (_e, { engine, model, language }) => {
+  setupAbort = new AbortController();
+  const { signal } = setupAbort;
+  const send = (p) => { if (setupWin && !setupWin.isDestroyed()) setupWin.webContents.send("setup:progress", p); };
+  const progress = (step) => {
+    let last = 0;
+    return (done, total) => { const now = Date.now(); if (now - last > 120 || done >= total) { last = now; send({ step, done, total }); } };
+  };
+  try {
+    const asset = ws.pickAsset(await whisperReleases(signal), engine);
+    if (!asset) throw new Error("Couldn't find a Windows build of whisper.cpp to download.");
+    const m = ws.MODELS.find((x) => x.id === model) ?? ws.MODELS[0];
+    console.log(`[setup] ${asset.name} (${asset.tag}) + ${m.file}`);
+    const zip = path.join(WHISPER_DIR, "downloads", asset.name);
+    await ws.download(asset.url, zip, { size: asset.size, signal, onProgress: progress("engine") });
+    const modelFile = path.join(WHISPER_DIR, "models", m.file);
+    await ws.download(ws.MODEL_URL(m.file), modelFile, { size: m.size, signal, onProgress: progress("model") });
+    send({ step: "extract" });
+    const binDir = path.join(WHISPER_DIR, `bin-${engine}`);
+    whisper.stop(); // a running server would keep its files locked
+    fs.rmSync(binDir, { recursive: true, force: true });
+    fs.mkdirSync(binDir, { recursive: true });
+    // Windows' own tar.exe (bsdtar) unpacks zip archives.
+    const tar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    await new Promise((resolve, reject) => require("node:child_process").execFile(tar, ["-xf", zip, "-C", binDir], { windowsHide: true },
+      (err) => (err ? reject(new Error(`Couldn't unpack whisper.cpp: ${err.message}`)) : resolve())));
+    const server = ws.findFile(binDir, "whisper-server.exe");
+    if (!server) throw new Error("The whisper.cpp download has no whisper-server.exe.");
+    fs.rmSync(zip, { force: true });
+    useWhisper(server, modelFile, language);
+    send({ step: "test" });
+    await whisper.start(); // loads the model: a build that can't run here fails now, not at the first dictation
+    send({ step: "ready" });
+    console.log(`[setup] ready: ${server}`);
+    return { ok: true };
+  } catch (err) {
+    if (signal.aborted) return { ok: false, cancelled: true };
+    console.error("[setup]", err);
+    return { ok: false, message: err.message };
+  } finally {
+    setupAbort = null;
+  }
+});
+ipcMain.on("setup:cancel", () => setupAbort?.abort());
+ipcMain.on("setup:close", () => setupWin?.close());
+
+// "I already have whisper.cpp": pick whisper-server.exe, then a model.
+ipcMain.handle("setup:useExisting", async (_e, language) => {
+  const exe = await dialog.showOpenDialog(setupWin, { title: "Choose whisper-server.exe", filters: [{ name: "whisper-server", extensions: ["exe"] }], properties: ["openFile"] });
+  if (exe.canceled || !exe.filePaths[0]) return { ok: false, cancelled: true };
+  const bin = await dialog.showOpenDialog(setupWin, { title: "Choose a Whisper model (.bin)", defaultPath: path.dirname(exe.filePaths[0]), filters: [{ name: "Whisper model", extensions: ["bin"] }], properties: ["openFile"] });
+  if (bin.canceled || !bin.filePaths[0]) return { ok: false, cancelled: true };
+  try {
+    useWhisper(exe.filePaths[0], bin.filePaths[0], language);
+    await whisper.start();
+    return { ok: true, model: path.basename(bin.filePaths[0]) };
+  } catch (err) {
+    return { ok: false, message: err.message };
+  }
+});
+ipcMain.on("settings:openSetup", () => openSetup());
+
 function whisperModels() {
   try {
     const dir = path.dirname(cfg.whisper.model);
@@ -678,6 +828,8 @@ function whisperModels() {
 }
 
 ipcMain.handle("settings:load", () => ({
+  version: app.getVersion(),
+  packaged: app.isPackaged,
   config: structuredClone(cfg),
   models: whisperModels(),
   keyNames: Object.keys(UiohookKey),
@@ -689,9 +841,9 @@ ipcMain.handle("settings:save", (_e, next) => {
   if (errors.length) return { ok: false, errors };
   const restart = needsRestart(cfg, next);
   if (restart && phase !== "idle") return { ok: false, message: "Finish the recording first: saving restarts the helper." };
-  fs.writeFileSync(CONFIG_FILE, `${formatConfig(next)}\n`);
   for (const k of Object.keys(cfg)) delete cfg[k];
   Object.assign(cfg, structuredClone(next));
+  saveConfig();
   saveState(); // pressEnter also lives in state.json
   if (cfg.cursorIndicator === false) hideOverlay();
   applyStartAtLogin();
@@ -702,6 +854,22 @@ ipcMain.handle("settings:save", (_e, next) => {
 });
 
 ipcMain.on("settings:capturing", (_e, on) => pauseHotkeys(!!on));
+
+// "Connect Claude Code" in Settings: the cards' hooks, the status line, the screenshots permission
+// and the shell prompts (claude-setup.cjs). The same as `npm run install-prompt` from a checkout.
+const launcherPaths = () => ({ dataDir: app.getPath("userData"), appDir: ROOT, exe: process.execPath });
+ipcMain.handle("settings:claudeStatus", () => ({ connected: claudeSetup.claudeConnected() }));
+ipcMain.handle("settings:claudeConnect", (_e, on) => {
+  try {
+    const lines = claudeSetup.connect({ ...launcherPaths(), shotsDir: shotsDir(), uninstall: !on,
+      oldDirs: [path.join(app.getPath("appData"), "terminal-claude-helper", "screenshots")] });
+    console.log(`[claude] ${on ? "connected" : "disconnected"}: ${lines.join("; ")}`);
+    return { ok: true, connected: claudeSetup.claudeConnected() };
+  } catch (err) {
+    console.error("[claude]", err);
+    return { ok: false, message: err.message };
+  }
+});
 ipcMain.on("settings:openLog", () => {
   if (!fs.existsSync(LOG.file)) LOG.write("INFO", ["(log opened from Settings)"]);
   shell.openPath(LOG.file);
@@ -738,6 +906,7 @@ function toggleRecording({ allowNoTarget = false } = {}) {
   if (phase === "recording") return stopRecording();
   if (phase !== "idle") return beep("error");
   if (!target && !allowNoTarget) return fail("Pick a target terminal first (right-click the tray icon).");
+  if (!whisperFilesOk()) { openSetup(); return fail("Set up speech recognition first."); }
   phase = "recording";
   mouseGuard?.setActive(true);
   shots = [];
@@ -1133,9 +1302,9 @@ ipcMain.on("done:layout", (_e, { height, cards }) => {
 });
 
 // The countdown ran out: "finished" cards go; a card asking for a permission stays until it is
-// clicked, closed, or replaced by that terminal's next card.
+// clicked, closed, or replaced by that terminal's next card, and so does "Update ready".
 function clearDone() {
-  doneCards = doneCards.filter((c) => c.kind === "ask");
+  doneCards = doneCards.filter((c) => c.kind === "ask" || c.kind === "update");
   if (doneCards.length) doneCountdown = null;
   renderDone();
 }
@@ -1183,6 +1352,7 @@ async function openDoneCard(id) {
   if (!card) return;
   doneCards = doneCards.filter((c) => c.id !== id);
   renderDone();
+  if (card.kind === "update") return installUpdate();
   try {
     const r = await focusTerminal(card.pid, card.chain, card.tabName);
     console.log(`[done] opened ${card.title}${r.tab ? ` (tab: ${r.tab})` : ""}`);
@@ -1217,9 +1387,59 @@ function setupDoneHook() {
   });
 }
 
+// ---------- updates ----------
+// The installed app checks the public releases repository (package.json build.publish) a minute
+// after starting and every 6 hours, through electron-updater: a newer version downloads in the
+// background, then an "Update ready" card (it stays up) offers to restart into it; otherwise it
+// installs when the app quits. Settings, hooks and screenshots live in the data folder, so they
+// carry over. A source checkout (npm start) doesn't update itself.
+let updater = null;
+let updateReady = null; // version downloaded and waiting
+function setupUpdates() {
+  if (!app.isPackaged) return;
+  ({ autoUpdater: updater } = require("electron-updater"));
+  updater.logger = { info: (m) => console.log(`[update] ${m}`), warn: (m) => console.warn(`[update] ${m}`), error: (m) => console.error(`[update] ${m}`), debug: () => {} };
+  updater.autoDownload = true;
+  updater.autoInstallOnAppQuit = true;
+  updater.on("update-downloaded", (info) => {
+    updateReady = info.version;
+    doneCards = [{
+      id: ++doneSeq, kind: "update", title: `Version ${info.version} is ready`, where: `You have ${app.getVersion()}`, project: "",
+      text: "Click to restart into it now. Otherwise it installs when you quit the app.",
+      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }), pid: 0, chain: [],
+    }, ...doneCards.filter((c) => c.kind !== "update")].slice(0, MAX_CARDS);
+    renderDone();
+    if (notifyCfg().sound !== false) beep("done");
+  });
+  setTimeout(checkForUpdates, 60_000);
+  setInterval(checkForUpdates, 6 * 3600_000);
+}
+// -> { status: "dev" | "none" | "available" | "ready" | "error", version?, message? }
+async function checkForUpdates() {
+  if (!updater) return { status: "dev" };
+  if (updateReady) return { status: "ready", version: updateReady };
+  try {
+    const r = await updater.checkForUpdates();
+    const v = r?.updateInfo?.version;
+    return v && v !== app.getVersion() ? { status: "available", version: v } : { status: "none" };
+  } catch (err) {
+    console.warn(`[update] check failed: ${err.message}`);
+    return { status: "error", message: err.message };
+  }
+}
+function installUpdate() {
+  if (!updater || !updateReady) return;
+  if (phase !== "idle") return fail("Finish the recording first, then restart to update.");
+  console.log(`[update] restarting into ${updateReady}`);
+  setImmediate(() => updater.quitAndInstall(true, true)); // silent install, then start the new version
+}
+ipcMain.handle("settings:checkUpdates", () => checkForUpdates());
+ipcMain.on("settings:installUpdate", () => installUpdate());
+
 // ---------- startup ----------
 app.whenReady().then(async () => {
-  app.setAppUserModelId(APP_NAME);
+  // Notifications are attributed to this id; the installer's shortcuts carry the appId.
+  app.setAppUserModelId(app.isPackaged ? APP_ID : APP_NAME);
   nativeTheme.themeSource = "dark"; // dark title bar on the settings window
   loadState();
 
@@ -1241,6 +1461,9 @@ app.whenReady().then(async () => {
   startTaskPipe();
   pruneScreenshots();
   applyStartAtLogin();
+  // The launchers that Claude Code's hooks, its status line and the shell prompts run (claude-setup.cjs):
+  // rewritten at every start, so they point at this copy of the app, wherever it is installed.
+  try { claudeSetup.writeLaunchers(launcherPaths()); } catch (err) { console.error("[claude]", err); }
 
   tray = new Tray(ICONS.notarget);
   tray.on("click", showMenu);
@@ -1258,9 +1481,11 @@ app.whenReady().then(async () => {
   setupDoneHook();
   setupChooserHook();
   registerTerminalsShortcut();
+  setupUpdates();
   await setupMouseGuard(); // before uiohook: see mouse-guard.cjs on hook order
   try { uIOhook.start(); } catch (err) { notify(APP_NAME, `Global mouse/key hook failed: ${err.message}`); }
   console.log(`[app] ready. Hotkey ${cfg.hotkey}. Target: ${target ? describe(target) : "none"}`);
+  if (!whisperFilesOk()) openSetup(); // a fresh install: download Whisper first
 });
 
 // ---------- mouse guard ----------
