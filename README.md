@@ -157,7 +157,7 @@ Start a voice recording first, then use either gesture:
 | One area of the screen | Hold **Back**, drag across the area, then release. No left-click is needed. |
 | A sequence of screen changes | Tap **Back** to begin capturing, then tap it again to stop. Ending voice recording also stops the capture. |
 
-While you are recording, Back and Forward only do these things: the app or web page under the cursor doesn't receive them, so a browser won't go back a page. The same applies to the Back + Forward press that starts or stops a recording, and to Back when you hold it to click a terminal. Outside a recording, a press of Back or Forward on its own works as usual.
+While you are recording, Back and Forward only do these things: the app or web page under the cursor doesn't receive them, so a browser won't go back a page. The same applies to the Back + Forward press that starts or stops a recording, and to Back when you hold it to click a terminal. Outside a recording, a press of Back or Forward on its own works as usual, except that it reaches the app when you release the button. Browsers only react on release anyway, but holding the button down in another app does nothing until you let go.
 
 For example: say *“This is the error I mean,”* capture the error, then continue explaining.
 

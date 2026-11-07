@@ -11,6 +11,8 @@
 // Hook order matters. Windows calls the newest low-level hook first, and a hook that swallows an
 // event hides it from the hooks after it. The guard is therefore installed *before* uiohook starts:
 // uiohook, being newer, sees every event first and passes it on; the guard then drops it.
+// Replayed clicks (a press the app didn't use, sent again on release) reach uiohook too; they
+// carry MARK in dwExtraInfo so the guard itself lets them through.
 //
 // Control: main posts WM_APP to the guard's thread (PostThreadMessageW), wParam 1 = recording,
 // 0 = not. The guard exits when the app process ends (it waits on the parent's handle).
@@ -53,17 +55,40 @@ function runGuard(parentPid, config) {
   const WM_XBUTTONDOWN = 0x020b;
   const WM_XBUTTONUP = 0x020c;
 
+  const PostThreadMessageW = u32.func("bool __stdcall PostThreadMessageW(uint32_t thread, uint32_t msg, uintptr_t wParam, intptr_t lParam)");
+  const SendInput = u32.func("uint32_t __stdcall SendInput(uint32_t n, void* inputs, int size)");
+  const WM_REPLAY = WM_APP + 1; // wParam: uiohook button to send again as a whole click
+  const MARK = 0x54434741; // dwExtraInfo of the clicks the guard replays, so it lets them through
+  // uiohook button -> [MOUSEEVENTF down, up, mouseData]
+  const SEND = { 3: [0x0020, 0x0040, 0], 4: [0x0080, 0x0100, 1], 5: [0x0080, 0x0100, 2] };
+  const replay = (button) => {
+    const [downFlag, upFlag, data] = SEND[button] ?? [];
+    if (!downFlag) return;
+    const inputs = Buffer.alloc(80); // two INPUTs (x64: 40 bytes each), type 0 = mouse
+    for (const [i, flag] of [[0, downFlag], [1, upFlag]]) {
+      inputs.writeUInt32LE(data, i * 40 + 16);
+      inputs.writeUInt32LE(flag, i * 40 + 20);
+      inputs.writeBigUInt64LE(BigInt(MARK), i * 40 + 32);
+    }
+    SendInput(2, inputs, 40);
+  };
+
   const guard = createButtonGuard(config);
+  let thread = 0;
   const proc = koffi.register((code, wParam, lParam) => {
     try {
-      if (code === 0) {
-        const msg = Number(wParam);
-        let ev = BUTTON_MSG[msg];
-        if (msg === WM_XBUTTONDOWN || msg === WM_XBUTTONUP) {
-          const x = koffi.decode(lParam, MSLLHOOKSTRUCT).mouseData >>> 16;
-          ev = [x === 1 ? 4 : x === 2 ? 5 : 0, msg === WM_XBUTTONDOWN];
+      const msg = Number(wParam);
+      const xbutton = msg === WM_XBUTTONDOWN || msg === WM_XBUTTONUP;
+      if (code === 0 && (BUTTON_MSG[msg] || xbutton)) {
+        const info = koffi.decode(lParam, MSLLHOOKSTRUCT);
+        if (Number(info.extra) !== MARK) {
+          const x = info.mouseData >>> 16;
+          const [button, isDown] = xbutton ? [x === 1 ? 4 : x === 2 ? 5 : 0, msg === WM_XBUTTONDOWN] : BUTTON_MSG[msg];
+          const action = guard.event(button, isDown);
+          // Sent after this hook call returns: injecting from inside a hook call is asking for trouble.
+          if (action === "replay") PostThreadMessageW(thread, WM_REPLAY, button, 0);
+          if (action !== "pass") return 1;
         }
-        if (ev && guard.event(ev[0], ev[1])) return 1;
       }
     } catch {}
     return CallNextHookEx(null, code, wParam, lParam);
@@ -75,7 +100,8 @@ function runGuard(parentPid, config) {
   if (!hook) throw new Error(`SetWindowsHookExW failed (${GetLastError()})`);
   const msg = {};
   PeekMessageW(msg, null, 0, 0, 0); // creates this thread's message queue before main posts to it
-  process.stdout.write(`${JSON.stringify({ ok: true, thread: GetCurrentThreadId() })}\n`);
+  thread = GetCurrentThreadId();
+  process.stdout.write(`${JSON.stringify({ ok: true, thread })}\n`);
 
   // Hook calls arrive as sent messages; PeekMessage dispatches them.
   for (;;) {
@@ -84,6 +110,7 @@ function runGuard(parentPid, config) {
     while (PeekMessageW(msg, null, 0, 0, PM_REMOVE)) {
       if (msg.message === WM_QUIT) return;
       if (msg.message === WM_APP) guard.setActive(Number(msg.wParam) !== 0);
+      if (msg.message === WM_REPLAY) replay(Number(msg.wParam));
     }
   }
 }
