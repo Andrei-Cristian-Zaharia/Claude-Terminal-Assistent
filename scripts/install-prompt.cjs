@@ -4,7 +4,8 @@
 //   - ~/.bashrc (Git Bash) sources shell/prompt.bash
 //   - ~/.claude/settings.json gets a "statusLine" running src/statusline.cjs, and the screenshots
 //     folder in permissions.additionalDirectories, so Claude Code can open the screenshots and
-//     screen-recording frames whose paths are dictated to it, in any project, without asking
+//     screen-recording frames whose paths are dictated to it, in any project, without asking;
+//     and a Stop hook running src/task-done.cjs, for the app's "Claude finished" card
 // Every added line carries MARKER, so --uninstall removes exactly what was added.
 // cmd has no programmable prompt, so it isn't covered.
 //
@@ -57,7 +58,10 @@ const OLD_SHOTS_DIR = path.join(process.env.APPDATA ?? "", "terminal-claude-help
 //   statusLine: ours is added or updated; someone else's is left alone (and noted).
 //   permissions.additionalDirectories: the screenshots folder is added; the pre-rename folder is
 //   dropped. --uninstall removes both entries and our statusLine.
-function updateClaudeSettings(input, { command, shotsDir, oldDirs = [], uninstall = false }) {
+//   hooks.Stop and hooks.Notification (permission_prompt): `hookCommand` (src/task-done.cjs) when
+//   Claude finishes answering or waits for a permission, for the app's cards; other hooks are kept.
+//   Left alone without hookCommand.
+function updateClaudeSettings(input, { command, hookCommand, shotsDir, oldDirs = [], uninstall = false }) {
   const settings = structuredClone(input ?? {});
   const notes = [];
   const ours = settings.statusLine?.command?.includes("statusline.cjs");
@@ -81,7 +85,27 @@ function updateClaudeSettings(input, { command, shotsDir, oldDirs = [], uninstal
     if (!dirs.length) delete settings.permissions.additionalDirectories;
     if (!Object.keys(settings.permissions).length) delete settings.permissions;
   }
+  if (hookCommand) {
+    setHook(settings, "Stop", undefined, uninstall ? null : hookCommand);
+    setHook(settings, "Notification", "permission_prompt", uninstall ? null : hookCommand);
+  }
   return { settings, notes };
+}
+
+// Our hook for `event` is the one whose command runs task-done.cjs: it is replaced (the project may
+// have moved) or removed; groups left empty, and an empty hooks object, are dropped.
+function setHook(settings, event, matcher, hookCommand) {
+  const ours = (h) => typeof h?.command === "string" && h.command.includes("task-done.cjs");
+  const groups = (settings.hooks?.[event] ?? [])
+    .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !ours(h)) }))
+    .filter((g) => g.hooks.length);
+  if (hookCommand) groups.push({ ...(matcher ? { matcher } : {}), hooks: [{ type: "command", command: hookCommand, timeout: 10 }] });
+  if (groups.length) {
+    settings.hooks = { ...settings.hooks, [event]: groups };
+  } else if (settings.hooks) {
+    delete settings.hooks[event];
+    if (!Object.keys(settings.hooks).length) delete settings.hooks;
+  }
 }
 
 function editClaudeSettings() {
@@ -98,6 +122,7 @@ function editClaudeSettings() {
   if (!uninstall) fs.mkdirSync(shotsDir, { recursive: true }); // Claude Code expects the folder to exist
   const { settings, notes } = updateClaudeSettings(current, {
     command: `node "${fwd(path.join(root, "src", "statusline.cjs"))}"`,
+    hookCommand: `node "${fwd(path.join(root, "src", "task-done.cjs"))}"`,
     shotsDir, oldDirs: [OLD_SHOTS_DIR], uninstall,
   });
   for (const n of notes) console.log(`note       ${file}: ${n}`);

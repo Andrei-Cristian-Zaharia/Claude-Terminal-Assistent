@@ -16,6 +16,7 @@
   .field { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; align-items: center; padding: 10px 0; }
   .field > label, .field > .label { font-weight: 500; }
   .field .help { grid-column: 1; color: var(--muted); font-size: 12px; max-width: 46ch; }
+  .field .help code { font: 11px "Cascadia Mono", Consolas, monospace; color: var(--ink); }
   .field .control { grid-column: 2; grid-row: 1 / span 2; justify-self: end; display: flex; align-items: center; gap: 8px; }
   .field .error { grid-column: 1 / -1; color: var(--danger); font-size: 12px; }
   .field .error:empty { display: none; }
@@ -117,13 +118,19 @@
     <h2>Typing</h2>
     <div class="field">
       <label for="confirmEnabled">Ask before sending</label>
-      <div class="help">A box at the top right shows the text with Accept and Reject. Hover it to stop the countdown. Your recording shortcut also rejects.</div>
+      <div class="help">A card in a corner of the screen shows the text with Accept and Reject. Hover it to stop the countdown. Your recording shortcut also rejects.</div>
       <div class="control"><span class="switch"><input type="checkbox" id="confirmEnabled"><span></span></span></div>
     </div>
     <div class="field" data-field="confirm.seconds">
       <label for="confirmSeconds">Send on its own after</label>
       <div class="help">If you don't choose, the text is accepted when this runs out.</div>
       <div class="control"><input type="number" id="confirmSeconds" min="1" max="30"><span class="unit">seconds</span></div>
+      <div class="error"></div>
+    </div>
+    <div class="field" data-field="confirm.position">
+      <label for="confirmPosition">Where it appears</label>
+      <div class="help">On the screen your mouse is on. If the Claude cards use the same corner, they move aside.</div>
+      <div class="control"><select id="confirmPosition"><option value="bottom-right">Bottom right</option><option value="top-right">Top right</option><option value="bottom-left">Bottom left</option><option value="top-left">Top left</option></select></div>
       <div class="error"></div>
     </div>
     <div class="field">
@@ -194,6 +201,32 @@
       <div class="help">Each frame costs Claude about 1,600 tokens.</div>
       <div class="control"><input type="number" id="maxFrames" min="1" max="30"><span class="unit">frames</span></div>
       <div class="error"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>When Claude finishes</h2>
+    <div class="field">
+      <label for="notifyEnabled">Show a card</label>
+      <div class="help">A card with the terminal and Claude's answer. Click it to bring that terminal forward. Not shown when that terminal is already in front. Needs <code>npm run install-prompt</code> once.</div>
+      <div class="control"><span class="switch"><input type="checkbox" id="notifyEnabled"><span></span></span></div>
+    </div>
+    <div class="field" data-field="notify.seconds">
+      <label for="notifySeconds">Hide it after</label>
+      <div class="help">Hovering the card keeps it up.</div>
+      <div class="control"><input type="number" id="notifySeconds" min="3" max="600"><span class="unit">seconds</span></div>
+      <div class="error"></div>
+    </div>
+    <div class="field" data-field="notify.position">
+      <label for="notifyPosition">Where it appears</label>
+      <div class="help">On the screen your mouse is on.</div>
+      <div class="control"><select id="notifyPosition"><option value="bottom-right">Bottom right</option><option value="top-right">Top right</option><option value="bottom-left">Bottom left</option><option value="top-left">Top left</option></select></div>
+      <div class="error"></div>
+    </div>
+    <div class="field">
+      <label for="notifySound">Play a sound</label>
+      <div class="help">Heard even when a full-screen game hides the card.</div>
+      <div class="control"><span class="switch"><input type="checkbox" id="notifySound"><span></span></span></div>
     </div>
   </section>
 
@@ -284,7 +317,8 @@ function render() {
   $("startAtLogin").checked = draft.startAtLogin !== false;
   $("confirmEnabled").checked = draft.confirm.enabled !== false;
   $("confirmSeconds").value = draft.confirm.seconds;
-  $("confirmSeconds").disabled = draft.confirm.enabled === false;
+  $("confirmSeconds").disabled = $("confirmPosition").disabled = draft.confirm.enabled === false;
+  $("confirmPosition").value = draft.confirm.position;
   $("cursorIndicator").checked = draft.cursorIndicator !== false;
   $("maxRecordSeconds").value = draft.maxRecordSeconds;
   $("silenceLevel").value = draft.silenceLevel;
@@ -293,6 +327,11 @@ function render() {
   $("interval").value = draft.screenRecord.intervalMs / 1000;
   $("maxFrames").value = draft.screenRecord.maxFrames;
   $("showNext").checked = draft.statusLine?.showNext !== false;
+  $("notifyEnabled").checked = draft.notify.enabled !== false;
+  $("notifySeconds").value = draft.notify.seconds;
+  $("notifySound").checked = draft.notify.sound !== false;
+  $("notifySeconds").disabled = $("notifySound").disabled = $("notifyPosition").disabled = draft.notify.enabled === false;
+  $("notifyPosition").value = draft.notify.position;
   $("language").value = draft.whisper.language;
   $("model").value = draft.whisper.model;
   updateFooter();
@@ -313,7 +352,8 @@ async function init() {
   draft = structuredClone(original);
   draft.screenRecord = { intervalMs: 1000, maxFrames: 10, maxWidth: 1920, ...draft.screenRecord };
   draft.statusLine = { showNext: true, ...draft.statusLine };
-  draft.confirm = { enabled: true, seconds: 3, ...draft.confirm };
+  draft.confirm = { enabled: true, seconds: 3, position: "bottom-right", ...draft.confirm };
+  draft.notify = { enabled: true, seconds: 15, sound: true, position: "bottom-right", ...draft.notify };
   keyNames = data.keyNames;
   restartKeys = data.restartKeys;
 
@@ -376,12 +416,20 @@ $("selectKind").addEventListener("change", (e) => {
 $("selectKey").addEventListener("click", captureSelectKey);
 $("mouseHold").addEventListener("input", (e) => { draft.mouseHoldMs = Math.round(Number(e.target.value) * 1000); updateFooter(); });
 for (const id of ["pressEnter", "dictationEnter", "cursorIndicator"]) $(id).addEventListener("change", (e) => { draft[id] = e.target.checked; });
-$("confirmEnabled").addEventListener("change", (e) => { draft.confirm.enabled = e.target.checked; $("confirmSeconds").disabled = !e.target.checked; });
+$("confirmEnabled").addEventListener("change", (e) => { draft.confirm.enabled = e.target.checked; $("confirmSeconds").disabled = $("confirmPosition").disabled = !e.target.checked; });
+$("confirmPosition").addEventListener("change", (e) => { draft.confirm.position = e.target.value; });
 $("confirmSeconds").addEventListener("input", (e) => { draft.confirm.seconds = Number(e.target.value); });
 $("startAtLogin").addEventListener("change", (e) => { draft.startAtLogin = e.target.checked; });
 $("openLog").addEventListener("click", () => settings.openLog());
 $("report").addEventListener("click", () => settings.report());
 $("showNext").addEventListener("change", (e) => { draft.statusLine.showNext = e.target.checked; });
+$("notifyEnabled").addEventListener("change", (e) => {
+  draft.notify.enabled = e.target.checked;
+  $("notifySeconds").disabled = $("notifySound").disabled = $("notifyPosition").disabled = !e.target.checked;
+});
+$("notifyPosition").addEventListener("change", (e) => { draft.notify.position = e.target.value; });
+$("notifySeconds").addEventListener("input", (e) => { draft.notify.seconds = Number(e.target.value); });
+$("notifySound").addEventListener("change", (e) => { draft.notify.sound = e.target.checked; });
 $("maxRecordSeconds").addEventListener("input", (e) => { draft.maxRecordSeconds = Number(e.target.value); });
 $("silenceLevel").addEventListener("input", (e) => {
   draft.silenceLevel = Number(e.target.value);

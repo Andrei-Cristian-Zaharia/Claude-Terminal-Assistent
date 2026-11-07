@@ -29,4 +29,9 @@ const sendToTerminal = (pid, text, enter) => runHelper(["send", String(pid), Buf
 const windowAt = (x, y) => runHelper(["window", String(Math.round(x)), String(Math.round(y))]); // physical pixels
 const typeIntoWindow = (hwnd, text, enter) => runHelper(["type", String(hwnd), Buffer.from(text, "utf8").toString("base64"), enter ? "1" : "0"]);
 
-module.exports = { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow };
+// "Claude finished" cards: the window in front, and bringing a terminal (or, without one, the
+// nearest window of the hook's ancestor chain) to the front.
+const foregroundWindow = () => runHelper(["foreground"]);
+const focusTerminal = (pid, chain = [], tabName = "") => runHelper(["focus", String(pid || 0), chain.join(","), Buffer.from(tabName, "utf8").toString("base64")]);
+
+module.exports = { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow, foregroundWindow, focusTerminal };

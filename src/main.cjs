@@ -1,6 +1,7 @@
 // Tray app: pick a target terminal, then press the global hotkey anywhere (even in a game) to
 // dictate a command. Flow: hotkey -> record (hidden window) -> local Whisper -> typed into target.
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const { app, Tray, BrowserWindow, globalShortcut, ipcMain, nativeImage, nativeTheme, Notification, session, screen, shell } = require("electron");
@@ -12,7 +13,9 @@ const { terminalLabel, keycaps, buttonName } = require("./labels.cjs");
 const { RESTART_KEYS, needsRestart, validate, formatConfig } = require("./settings-model.cjs");
 const { trayIcon } = require("./tray-icon.cjs");
 const { createLog, hookConsole } = require("./log.cjs");
-const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow } = require("./terminals.cjs");
+const { listTerminals, terminalAt, captureArea, sendToTerminal, windowAt, typeIntoWindow, foregroundWindow, focusTerminal } = require("./terminals.cjs");
+const tasks = require("./tasks.cjs");
+const corners = require("./corners.cjs");
 const { startMouseGuard } = require("./mouse-guard.cjs");
 
 const ROOT = path.join(__dirname, "..");
@@ -117,6 +120,8 @@ const BEEPS = {
   screenOn: [[700, 60], [1050, 80]],
   confirm: [[880, 50]],
   screenOff: [[1050, 60], [700, 80]],
+  done: [[523, 70], [659, 70], [784, 130]], // Claude finished in a terminal
+  ask: [[784, 90], [784, 90], [523, 160]], // Claude waits for a permission
 };
 const beep = (name) => recorderWin?.webContents.send("rec:beep", BEEPS[name]);
 
@@ -451,12 +456,14 @@ async function selectAt(x, y) {
 function setTarget(t) {
   // Only a console record from the helper can be a target; anything else is a programming error.
   if (!t?.pid) return fail(`Could not select that terminal (no pid in ${JSON.stringify(t)?.slice(0, 80)}).`);
-  target = t;
+  // A click on a window gives no tab names; the last listing may know this one's.
+  const known = terminals.find((x) => x.pid === t.pid);
+  target = t.tabName || !known?.tabName ? t : { ...t, tabName: known.tabName };
   saveState();
   refreshTray();
   beep("sent");
-  showOverlay("ok", `Target: ${t.title || t.shell}`, 2000);
-  console.log(`[select] ${describe(t)}`);
+  showOverlay("ok", `Target: ${terminalLabel(target).title}`, 2000);
+  console.log(`[select] ${describe(target)}`);
 }
 
 // The clicked window holds several terminals and nothing tells which tab is showing (IntelliJ's
@@ -516,7 +523,7 @@ function saveState() {
 const ICONS = Object.fromEntries(["idle", "notarget", "recording", "transcribing"].map((k) => [k, trayIcon(nativeImage, k)]));
 ICONS.confirming = ICONS.transcribing;
 
-const describe = (t) => `${t.title || t.shell} (${t.shell}${t.host ? ` in ${t.host}` : ""}, pid ${t.pid})`;
+const describe = (t) => `${t.tabName ? `[${t.tabName}] ` : ""}${t.title || t.shell} (${t.shell}${t.host ? ` in ${t.host}` : ""}, pid ${t.pid})`;
 
 function refreshTray() {
   const icon = phase !== "idle" ? ICONS[phase] : target ? ICONS.idle : ICONS.notarget;
@@ -863,14 +870,28 @@ const ENTER_DELAY_MS = 500;
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- accept / reject before sending ----------
-// After transcription a toast at the top right of the screen shows the text with Reject and
-// Accept. Accept counts down (config "confirm.seconds", default 3) and fires on its own. The
+// After transcription a toast in a corner of the screen (config "confirm.position", default bottom
+// right; see corners.cjs) shows the text with Reject and Accept, on the same card as the "Claude
+// finished" notifications. Accept counts down (config "confirm.seconds", default 3) and fires on its own. The
 // toast never takes the focus; clicks and hover come from the global hook. Hovering it pauses
 // the countdown so a long text can be read; the recording shortcut or the mouse chord rejects.
 // config "confirm.enabled": false sends straight away, as before.
 let confirmWin = null;
 let pendingConfirm = null; // { resolve, remaining, startedAt, timer, paused, shown, rects }
-const CONFIRM_WIDTH = 400;
+let confirmPlace = null; // { area, height } while the toast is up
+const CONFIRM_WIDTH = 380; // as wide as the "Claude finished" cards, so they line up when stacked
+
+// Places the toast and the "Claude finished" cards in their corners; when they share one, the
+// cards stack beyond the toast. Called whenever either appears, changes height or goes away.
+function placeToasts() {
+  const c = pendingConfirm?.shown && confirmPlace
+    ? { corner: corners.cornerOf(cfg.confirm?.position), area: confirmPlace.area, width: CONFIRM_WIDTH, height: confirmPlace.height } : null;
+  const d = doneCards.length && donePlace
+    ? { corner: corners.cornerOf(cfg.notify?.position), area: donePlace.area, width: DONE_WIDTH, height: donePlace.height } : null;
+  const b = corners.placeToasts({ confirm: c, done: d });
+  if (b.confirm) confirmWin.setBounds(b.confirm);
+  if (b.done) doneWin.setBounds(b.done);
+}
 
 function createConfirm() {
   confirmWin = new BrowserWindow({
@@ -903,9 +924,9 @@ ipcMain.on("confirm:layout", (_e, { height, accept, reject }) => {
   if (!c || c.shown) return;
   c.shown = true;
   c.rects = { accept, reject };
-  // Top right of the monitor the cursor is on, where a game or editor is being used.
-  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-  confirmWin.setBounds({ x: wa.x + wa.width - CONFIRM_WIDTH - 12, y: wa.y + 12, width: CONFIRM_WIDTH, height: Math.round(height) });
+  // On the monitor the cursor is on, where a game or editor is being used.
+  confirmPlace = { area: screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea, height };
+  placeToasts();
   confirmWin.showInactive();
   confirmWin.moveTop();
   runConfirm();
@@ -935,6 +956,8 @@ function resolveConfirm(ok, how) {
   pendingConfirm = null;
   clearTimeout(c.timer);
   confirmWin.hide();
+  confirmPlace = null;
+  placeToasts(); // cards that stacked beyond it move back into the corner
   console.log(`[confirm] ${ok ? "accepted" : "rejected"} (${how})`);
   c.resolve(ok);
 }
@@ -975,6 +998,203 @@ function setupConfirmHook() {
   });
 }
 
+// ---------- "Claude finished" cards ----------
+// Claude Code runs src/task-done.cjs as a Stop hook (npm run install-prompt) when it finishes
+// answering, and as a Notification hook when it waits for a permission (kind "ask"); the hook sends
+// its ancestor pids, folder and Claude's last message (or the question) over a named pipe.
+// A card in a corner of the screen (config notify.position, default bottom right) says which
+// terminal finished and how; a click on it
+// brings that terminal forward (in Windows Terminal, its tab too). No card when that terminal is
+// already in front. Our own window rather than a Windows notification: those are held back
+// while a full-screen game runs, and this one shows above borderless games. Like the
+// accept/reject toast it never takes the focus; hover and clicks come from the global hook.
+// config "notify": enabled, seconds (until the cards go away; hovering pauses), sound, position.
+let doneWin = null;
+let doneCards = []; // newest first: { id, kind, sessionId, title, where, project, text, time, pid, tabName, chain }
+let doneRects = []; // from done:layout: [{ id, rect, close }], CSS px inside the window
+let donePlace = null; // { area, height }: the display the cards are on (kept while they are up) and their height
+let doneCountdown = null; // { remaining, startedAt, timer, paused }
+let doneSeq = 0;
+const DONE_WIDTH = 380;
+const MAX_CARDS = 3;
+const notifyCfg = () => ({ enabled: true, seconds: 15, sound: true, ...cfg.notify });
+
+function createDone() {
+  doneWin = new BrowserWindow({
+    width: DONE_WIDTH, height: 160, show: false, frame: false, transparent: true, resizable: false,
+    focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, movable: false,
+    webPreferences: { preload: path.join(__dirname, "done-preload.cjs"), backgroundThrottling: false },
+  });
+  doneWin.setAlwaysOnTop(true, "screen-saver");
+  doneWin.setVisibleOnAllWorkspaces(true);
+  return doneWin.loadFile(path.join(__dirname, "done.html"));
+}
+
+function startTaskPipe() {
+  const server = net.createServer((sock) => {
+    let data = "";
+    sock.setEncoding("utf8");
+    sock.setTimeout(5000, () => sock.destroy());
+    sock.on("data", (d) => { data += d; if (data.length > 64 * 1024) sock.destroy(); });
+    sock.on("end", () => {
+      const m = tasks.parseMessage(data);
+      if (m) onTaskDone(m).catch((err) => console.error("[done]", err));
+    });
+    sock.on("error", () => {});
+  });
+  // Another copy (a test run with --user-data-dir) may already hold the pipe.
+  server.on("error", (err) => console.warn(`[done] no "Claude finished" cards: ${err.message}`));
+  server.listen(tasks.PIPE_NAME);
+}
+
+async function onTaskDone(m) {
+  const n = notifyCfg();
+  if (n.enabled === false) return;
+  let list = terminals;
+  try { list = await listTerminals(); terminals = list; } catch (err) { console.error(err); }
+  const t = tasks.findTerminal(list, m.chain);
+  try {
+    if (tasks.isShowing({ fg: await foregroundWindow(), terminal: t, terminals: list, chain: m.chain })) {
+      return console.log(`[done] ${t ? describe(t) : "Claude"} ${m.kind === "ask" ? "asks" : "finished"}, already in front: no card`);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  const label = t ? terminalLabel(t) : null;
+  const card = {
+    id: ++doneSeq,
+    kind: m.kind,
+    sessionId: m.sessionId,
+    title: label?.title || "Claude Code",
+    where: label?.where ?? "",
+    project: m.cwd ? path.basename(m.cwd) : "",
+    text: tasks.summarize(m.text, m.kind === "ask" ? 300 : 220),
+    time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
+    pid: t?.pid ?? 0,
+    tabName: t?.tabName ?? "",
+    chain: m.chain,
+  };
+  // One card per terminal (or session): a newer answer replaces the older card.
+  const same = (c) => (card.pid && c.pid === card.pid) || (card.sessionId && c.sessionId === card.sessionId);
+  doneCards = [card, ...doneCards.filter((c) => !same(c))].slice(0, MAX_CARDS);
+  console.log(`[done] ${t ? describe(t) : "Claude (no terminal found)"} ${m.kind === "ask" ? "asks" : "finished"}: ${JSON.stringify(card.text.slice(0, 80))}`);
+  if (n.sound !== false) beep(m.kind === "ask" ? "ask" : "done");
+  renderDone();
+  restartDoneCountdown();
+}
+
+// Sends the cards to the page, which answers with done:layout; with none left, hides the window.
+function renderDone() {
+  if (!doneCards.length) {
+    clearTimeout(doneCountdown?.timer);
+    doneCountdown = null;
+    doneRects = [];
+    donePlace = null;
+    doneWin.hide();
+    return;
+  }
+  doneWin.webContents.send("done:state", {
+    seconds: notifyCfg().seconds,
+    cards: doneCards.map(({ id, kind, title, where, project, text, time }) => ({ id, kind, title, where, project, text, time })),
+  });
+}
+
+ipcMain.on("done:layout", (_e, { height, cards }) => {
+  doneRects = cards;
+  if (!doneCards.length) return;
+  // In its corner (config notify.position) of the monitor the cursor is on, where a game or editor
+  // is being used; it stays on that monitor while cards are up.
+  donePlace = { area: donePlace?.area ?? screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea, height };
+  placeToasts();
+  if (!doneWin.isVisible()) doneWin.showInactive();
+  doneWin.moveTop();
+});
+
+// The countdown ran out: "finished" cards go; a card asking for a permission stays until it is
+// clicked, closed, or replaced by that terminal's next card.
+function clearDone() {
+  doneCards = doneCards.filter((c) => c.kind === "ask");
+  if (doneCards.length) doneCountdown = null;
+  renderDone();
+}
+
+function restartDoneCountdown() {
+  clearTimeout(doneCountdown?.timer);
+  doneCountdown = { remaining: notifyCfg().seconds * 1000, startedAt: 0, timer: null, paused: false };
+  runDoneCountdown();
+}
+
+function runDoneCountdown() {
+  const c = doneCountdown;
+  c.paused = false;
+  c.startedAt = Date.now();
+  clearTimeout(c.timer);
+  c.timer = setTimeout(clearDone, c.remaining);
+  doneWin.webContents.send("done:run", { remaining: c.remaining });
+}
+
+function pauseDoneCountdown(on) {
+  const c = doneCountdown;
+  if (!c || c.paused === on) return;
+  if (!on) return runDoneCountdown();
+  clearTimeout(c.timer);
+  c.remaining = Math.max(0, c.remaining - (Date.now() - c.startedAt));
+  c.paused = true;
+  doneWin.webContents.send("done:pause", { remaining: c.remaining });
+}
+
+// What is under the hook event's point: { id, part: "card" | "close" }, "panel" (the window, between
+// cards) or null (outside).
+function doneHit(e) {
+  if (!doneCards.length || !doneWin?.isVisible() || !insideWindow(doneWin, e)) return null;
+  const p = screen.screenToDipPoint({ x: e.x, y: e.y });
+  const b = doneWin.getBounds();
+  const x = p.x - b.x, y = p.y - b.y;
+  const inside = (r) => x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+  const card = doneRects.find((c) => inside(c.rect));
+  if (!card) return "panel";
+  return { id: card.id, part: inside(card.close) ? "close" : "card" };
+}
+
+async function openDoneCard(id) {
+  const card = doneCards.find((c) => c.id === id);
+  if (!card) return;
+  doneCards = doneCards.filter((c) => c.id !== id);
+  renderDone();
+  try {
+    const r = await focusTerminal(card.pid, card.chain, card.tabName);
+    console.log(`[done] opened ${card.title}${r.tab ? ` (tab: ${r.tab})` : ""}`);
+  } catch (err) {
+    fail(err.message);
+  }
+}
+
+function setupDoneHook() {
+  let hovered = null;
+  const key = (h) => (h && typeof h === "object" ? `${h.id}:${h.part}` : null);
+  const move = (e) => {
+    if (!doneCards.length) return;
+    const hit = doneHit(e);
+    pauseDoneCountdown(!!hit);
+    const card = hit && typeof hit === "object" ? hit : null;
+    if (key(card) !== key(hovered)) { hovered = card; doneWin.webContents.send("done:hover", card); }
+  };
+  uIOhook.on("mousemove", move);
+  uIOhook.on("mousedrag", move);
+  uIOhook.on("mousedown", (e) => {
+    if (e.button !== 1) return;
+    const hit = doneHit(e);
+    if (!hit || hit === "panel") return;
+    hovered = null;
+    if (hit.part === "close") {
+      doneCards = doneCards.filter((c) => c.id !== hit.id);
+      renderDone();
+    } else {
+      openDoneCard(hit.id);
+    }
+  });
+}
+
 // ---------- startup ----------
 app.whenReady().then(async () => {
   app.setAppUserModelId(APP_NAME);
@@ -995,6 +1215,8 @@ app.whenReady().then(async () => {
   await createMenu();
   await createChooser();
   await createConfirm();
+  await createDone();
+  startTaskPipe();
   pruneScreenshots();
   applyStartAtLogin();
 
@@ -1011,6 +1233,7 @@ app.whenReady().then(async () => {
   setupHotkey();
   setupMouseHotkey();
   setupConfirmHook();
+  setupDoneHook();
   setupChooserHook();
   registerTerminalsShortcut();
   await setupMouseGuard(); // before uiohook: see mouse-guard.cjs on hook order

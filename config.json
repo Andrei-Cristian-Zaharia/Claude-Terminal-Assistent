@@ -21,5 +21,6 @@
     "threads": 4,
     "idleUnloadMinutes": 15
   },
-  "confirm": { "enabled": true, "seconds": 3 }
+  "confirm": { "enabled": true, "seconds": 3, "position": "bottom-right" },
+  "notify": { "enabled": true, "seconds": 15, "sound": true, "position": "bottom-right" }
 }

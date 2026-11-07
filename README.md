@@ -4,11 +4,11 @@
 
 Playing a game, reading a page, or working in another app? Choose a terminal, press a shortcut, and say what you want to send. Claude Terminal Assistant turns your speech into text and types it into that terminal without switching away from your current window.
 
-For example, leave Claude Code open in a terminal, switch to your browser, and say: *“Explain the error and suggest a fix.”* You can include a screenshot while you speak, too.
+For example, leave Claude Code open in a terminal, switch to your browser, and say: *“Explain the error and suggest a fix.”* You can include a screenshot while you speak, too. When Claude is done, or needs your permission, a small card in the corner of the screen tells you; click it to jump straight back to that terminal.
 
 The helper lives beside the Windows clock as a small microphone icon. Speech recognition runs on your PC with whisper.cpp; no cloud transcription account or API key is needed. The terminal app you send the text to, such as Claude Code, has its own requirements.
 
-[Install](#install) · [First dictation](#your-first-dictation) · [Settings](#settings) · [Shortcuts](#shortcuts) · [Troubleshooting](#troubleshooting)
+[Install](#install) · [First dictation](#your-first-dictation) · [When Claude finishes](#when-claude-finishes) · [Naming terminals](#naming-your-terminals) · [Settings](#settings) · [Shortcuts](#shortcuts) · [Troubleshooting](#troubleshooting)
 
 ## Install
 
@@ -78,19 +78,59 @@ Look for the microphone icon beside the Windows clock. It may be inside the **hi
 
 **Start with Windows is on by default.** After the first launch, the helper is configured to start when you sign in. You can turn this off in **Settings → General**. Keep the project folder in place while you use this option.
 
+### 5. Connect Claude Code (recommended)
+
+If you use Claude Code, run this once from the project folder:
+
+```powershell
+npm run install-prompt
+```
+
+It sets up three things in Claude Code's settings, plus a small line in your shells:
+
+- **The cards when Claude finishes or needs your permission** (see [When Claude finishes](#when-claude-finishes)), through two Claude Code hooks. Without this step, no cards appear.
+- **Screenshots without asking:** Claude Code may open the screenshots and screen frames you dictate to it, in any project, without asking each time.
+- **A "● Selected / ○ Not selected" indicator** in Claude Code's status line, and in the PowerShell and Git Bash prompts, so you can see which terminal your dictation goes to. Command Prompt (`cmd`) has no programmable prompt, so it isn't covered.
+
+Restart your Claude Code sessions and open new shells to load the changes. Running it again is safe; it updates what it added, for example after moving the project folder. Your own status line and hooks are kept. To undo everything it added:
+
+```powershell
+npm run install-prompt -- --uninstall
+```
+
 ## Your first dictation
 
 1. **Open the terminal you want to talk to.** If you want to send prompts to Claude Code, start it there first. The helper types into whatever is currently running in the selected terminal.
 2. **Choose that terminal.** Click the microphone in the tray and select it from the list. The icon turns orange when a target is selected.
 3. **Switch to another app.** The terminal stays selected in the background.
 4. **Tap Ctrl+Alt, release both keys, and speak.** A small indicator beside the cursor shows the recording time. Tap the same shortcut again when you finish. Recording also stops after 60 seconds by default.
-5. **Review the text.** A box at the top right shows the transcript and its destination. Click **Accept** to send it or **Reject** to discard it. Hover over the box to pause the countdown.
+5. **Review the text.** A card at the bottom right shows the transcript and its destination. Click **Accept** to send it or **Reject** to discard it. Hover over the card to pause the countdown.
 
 **With the starting settings, the text is accepted automatically after 3 seconds, then Enter is pressed in the terminal.** To leave the text there for editing, turn off **Settings → Typing → Press Enter after the text**. You can also increase the review countdown.
 
 The first dictation may take longer because Whisper has to load the model. Later dictations reuse it until it unloads after a period of inactivity.
 
 The tray icon shows the current state: **gray** = no terminal selected, **orange** = ready, **red** = recording, **yellow** = transcribing.
+
+## When Claude finishes
+
+Leave Claude working in a terminal and go do something else. When it finishes answering, a small card appears at the bottom right of the screen (the same kind of card as the review box), with a short chime. It shows which terminal it was, the project folder, and the start of Claude's answer.
+
+- **Click the card to bring that terminal to the front.** In Windows Terminal the right tab is selected too.
+- Click **✕** to dismiss it.
+- Cards go away after 15 seconds; hovering keeps them up. Up to three stack, newest on top, one per terminal.
+
+When Claude is **waiting for your permission** (to run a command, edit a file…), a gold **Claude needs you** card appears instead, with a different chime. It stays until you click it, close it, or that terminal's next card replaces it.
+
+No card appears when that terminal is already in front of you. The cards show above borderless games; in exclusive full-screen you still hear the chime. If Claude runs inside an editor rather than a terminal, a click brings that editor's window forward.
+
+The cards need the Claude Code hooks from [step 5 of the install](#5-connect-claude-code-recommended). In **Settings → When Claude finishes** you can turn them or their sound off, change how long they stay, and pick the corner of the screen.
+
+## Naming your terminals
+
+With several terminals open, give them names you recognize at a glance. Rename a Windows Terminal tab (right-click the tab → **Rename tab**) and that name is what the tray menu, the terminal list and the Claude cards show, with the original title (for Claude Code, the session name) underneath. In Claude Code, `/rename` changes the session name, which the list shows too.
+
+One limit: if one Windows Terminal window holds several renamed tabs, the helper can't tell which is which, so those keep their original titles rather than risk sending your words to the wrong one. One renamed tab per window, or renamed tabs in separate windows, always work. Terminals inside VS Code and IntelliJ show their own titles.
 
 ## Settings
 
@@ -102,11 +142,13 @@ Click the tray microphone, then **Settings**. Most everyday changes can be made 
 | Change the recording shortcut | **Shortcuts → Start and stop recording**. Click the shortcut field and press your new combination. |
 | Keep Ctrl+Tab for my browser or editor | **Shortcuts → Show the terminal list**. Choose another shortcut or click **Turn off**. |
 | Use different mouse buttons | **Shortcuts → Mouse buttons**. Choose a combination, or **Off**. |
+| Move the review box or the Claude cards to another corner | **Typing → Where it appears** and **When Claude finishes → Where it appears**. If both use the same corner, the Claude cards move aside. |
 | Review the text for longer | **Typing → Send on its own after**. Hovering over the review box also pauses its countdown. |
 | Send immediately without the review box | Turn off **Typing → Ask before sending**. |
 | Type into the terminal without submitting | Turn off **Typing → Press Enter after the text**. This is also available in the tray menu. |
 | Record longer than a minute | **Recording → Stop recording after**. |
 | Hide the indicator beside the mouse | Turn off **Typing → Show the recording pill next to the cursor**. |
+| Turn off the Claude cards, their sound, or change how long they stay | **When Claude finishes**. |
 | Stop launching automatically | Turn off **General → Start with Windows**. |
 | Release GPU memory sooner | **Speech recognition → Free the graphics memory after**. Starts at 15 minutes; 0 keeps the model loaded. |
 | Use another downloaded model | **Speech recognition → Model**. The list shows `.bin` files in the same folder as the configured model. |
@@ -128,6 +170,8 @@ Settings are stored in [`config.json`](config.json) in the project folder. After
 | `select` | Button for selecting terminals and capturing the screen. For example, `{ "mouseButton": 4 }` or `{ "key": "F13" }`. |
 | `screenshotsDir` | Capture folder. An empty string uses the default. Use a dedicated folder without spaces; files older than 7 days are cleaned up there. |
 | `screenRecord` | Screen capture interval, frame limit, and image size. Starts at one check per second, a frame limit of 10, and `maxWidth: 1920`. |
+| `notify` | The card when Claude finishes: `enabled`, `seconds` it stays up, `sound`, `position` (`bottom-right`, `top-right`, `bottom-left`, `top-left`). |
+| `confirm` | The review box: `enabled`, `seconds` before it accepts, `position` (same corners). |
 | `silenceLevel` | Minimum audio level to transcribe. Starts at `0.015`; lower it if quiet speech is skipped, or raise it if background noise produces unwanted text. |
 
 </details>
@@ -189,39 +233,27 @@ Only text is sent in this mode. **Press Enter when typing into other apps** is a
 | The transcript is in the wrong language | Choose a specific language under **Speech recognition → Language** instead of automatic detection. |
 | The terminal is missing or sending fails | Open the terminal and select it again. A non-administrator helper cannot send to a terminal running as administrator. |
 | Several terminal tabs share one window | Select the exact terminal from the tray list. If clicking a window is ambiguous, the helper asks you to choose. |
-| The overlay does not appear over a game | Use borderless or windowed mode. Exclusive full screen can hide overlays, and some games may block shortcuts. |
+| The overlay or the cards don't appear over a game | Use borderless or windowed mode. Exclusive full screen can hide them (you still hear the chimes), and some games may block shortcuts. |
+| No card when Claude finishes | Run `npm run install-prompt` once and restart your Claude Code sessions. The helper must be running, and **Settings → When Claude finishes → Show a card** must be on. No card appears for the terminal that is already in front of you. |
+| A renamed tab shows its old title | Its window holds other renamed tabs, so the helper can't match names to tabs. Move it to its own window, or keep one renamed tab per window. |
 | Starting the app opens its menu | It is already running. The helper keeps one instance. |
 | Something else goes wrong | Open **Settings → Open log** to see what happened. To report it, click **Report a problem**: it opens a GitHub issue with your versions filled in. Attach the log, or the lines around the problem, after reading it over, because it also contains the text you dictated. |
-
-## Optional: show which terminal is selected
-
-To add a **● Selected / ○ Not selected** indicator to PowerShell, Git Bash, and Claude Code's status line, run this from the project folder:
-
-```powershell
-npm run install-prompt
-```
-
-This updates the relevant shell profiles and Claude Code settings. It also lets Claude Code open the screenshots and screen frames you dictate to it, in any project, without asking each time: the screenshots folder is added to Claude Code's allowed folders. Open a new shell session and restart Claude Code to load the changes. Command Prompt (`cmd`) is not covered.
-
-To remove the indicator and the screenshots permission:
-
-```powershell
-npm run install-prompt -- --uninstall
-```
 
 ## Local files and privacy
 
 Audio is transcribed locally by Whisper. The helper sends the resulting text and any image paths to the destination you choose. If that destination is a cloud-connected assistant, it may send that content to its own service.
 
+For the Claude cards, Claude Code's hook passes the start of Claude's answer (or its permission question) to the helper over a local pipe on your PC; nothing goes over the network.
+
 - **App settings:** `config.json` in the project folder.
 - **Saved terminal selection:** `%APPDATA%\claude-terminal-assistant\state.json`.
 - **Screenshots and screen frames:** `%APPDATA%\claude-terminal-assistant\screenshots`, unless you set a custom capture folder. Files older than 7 days are pruned when the helper starts.
-- **Log:** `%APPDATA%\claude-terminal-assistant\logs\app.log`, with what the helper did, any errors, and the text you dictated. It stays under about 1 MB; the previous one is kept as `app.old.log`. It never leaves your PC unless you attach it to a report.
+- **Log:** `%APPDATA%\claude-terminal-assistant\logs\app.log`, with what the helper did, any errors, the text you dictated, and the first words of the answers shown on the Claude cards. It stays under about 1 MB; the previous one is kept as `app.old.log`. It never leaves your PC unless you attach it to a report.
 
 ## Remove the app
 
 1. Turn off **Settings → General → Start with Windows**.
-2. If you installed the terminal indicator, run the uninstall command above while the project folder still exists.
+2. If you ran `npm run install-prompt`, run `npm run install-prompt -- --uninstall` while the project folder still exists. It removes the hooks, the indicator and the screenshots permission.
 3. Choose **Quit** from the tray menu, then delete the project folder.
 4. To also remove saved state and captures, delete `%APPDATA%\claude-terminal-assistant` and any custom capture folder you configured.
 

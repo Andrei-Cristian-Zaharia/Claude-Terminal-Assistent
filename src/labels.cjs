@@ -19,18 +19,25 @@ const hostName = (exe = "") => HOSTS[exe.toLowerCase()] ?? (exe ? exeTitle(exe) 
 
 // The console title without the status glyphs Claude Code animates in front (✳ ◐ ⠋ …). A title
 // that is only the shell's own path ("C:\WINDOWS\system32\cmd.exe") says nothing: use the shell name.
-function terminalTitle(t) {
+function consoleTitle(t) {
   const title = (t.title ?? "").trim().replace(/^[^\p{L}\p{N}]+/u, "").trim();
-  if (!title || /^[a-z]:\\.*\.exe\s*$/i.test(title)) return shellName(t.shell);
+  if (!title || /^[a-z]:\\.*\.exe\s*$/i.test(title)) return "";
   return title;
 }
 
-// What the menu shows for one terminal.
+// The name the person gave the tab (tabnames.cjs) comes first, then the console title.
+function terminalTitle(t) {
+  return t.tabName?.trim() || consoleTitle(t) || shellName(t.shell);
+}
+
+// What the menu shows for one terminal. A renamed tab keeps its console title (for Claude Code,
+// the session name) next to where it runs.
 function terminalLabel(t) {
+  const inner = t.tabName?.trim() ? consoleTitle(t) : "";
   return {
     pid: t.pid,
     title: terminalTitle(t),
-    where: `${shellName(t.shell)} in ${hostName(t.host)}`,
+    where: `${shellName(t.shell)} in ${hostName(t.host)}${inner && inner !== t.tabName.trim() ? ` · ${inner}` : ""}`,
     claude: (t.processes ?? []).some((p) => p.toLowerCase() === "claude.exe"),
   };
 }
